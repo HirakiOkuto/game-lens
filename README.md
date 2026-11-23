@@ -88,5 +88,5 @@ $env:GAMELENS_PROFILE = "profiles/fake-game.json"; .venv\Scripts\python.exe -m g
 
 - `gamelens/` ตัวแอป (หน้าต่าง, จับภาพ, overlay)
 - `server/` ระบบอ่านข้อความ (PP-OCR) และแปล ทำงานที่ `127.0.0.1:9960` แอปเปิดและปิดให้เอง
-- `models/Hy-MT2-7B-Q4_K_M.gguf` โมเดลแปลในเครื่อง (ต้องมี `llama` ใน PATH)
+- โมเดลแปลในเครื่องอยู่ที่โฟลเดอร์กลาง `D:\AI\models\Hy-MT2-7B-Q4_K_M.gguf` (เปลี่ยนได้ที่ `models_dir` ใน `settings.json`; ต้องมี `llama` ใน PATH)
 - `server/data/` cache คำแปล, glossary, key (อยู่ในเครื่องนี้เท่านั้น)

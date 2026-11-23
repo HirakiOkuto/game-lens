@@ -84,6 +84,7 @@ class Settings:
     hotkeys: dict = field(default_factory=lambda: {"toggle": "Ctrl+F8", "screen": "F9", "regions": "F10", "history": "F7"})
     peek_key: str = "F8"  # hold to see the original text (polled, not captured: the game still gets the key)
     context_lines: int = 6
+    models_dir: str = "D:/AI/models"  # shared folder with the .gguf translation models
     auto_start_server: bool = True  # start the server + local model when game-lens starts
     stop_server_on_exit: bool = True  # ...and stop what we started when it quits
     start_hidden: bool = False  # open only the tray icon once setup is complete

@@ -1,6 +1,5 @@
 .venv/
 logs/
-models/
 server/data/
 __pycache__/
 *.pyc

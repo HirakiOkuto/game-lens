@@ -151,7 +151,7 @@ class Controller(QObject):
             Profile(name=ppath.stem, series=ppath.stem, path=str(ppath)).save()
         self.profile = Profile.load(ppath)
         self.api = LensClient(self.settings.server, self.settings.resolve(self.settings.token_file))
-        self.services = ServerManager(ROOT, ROOT / "logs")
+        self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir))
         self.pool = ThreadPoolExecutor(3)
         self.bridge = Bridge()
         self.bridge.region_done.connect(self.on_region_done)

@@ -90,6 +90,12 @@ def glossary_key(series: str, target: str) -> str:
     return f"{series}|{target}"
 
 
+@app.get("/ping")
+def ping():
+    """Is the server up? (/health also probes every engine, which takes a second or two.)"""
+    return {"ok": True, "app": "game-lens"}
+
+
 @app.get("/health")
 def health():
     from concurrent.futures import ThreadPoolExecutor

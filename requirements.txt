@@ -1,0 +1,17 @@
+# versions checked 2026-11-23 (latest on PyPI)
+# client
+PySide6==6.12.0
+windows-capture==2.0.1
+opencv-python==5.1.0.95
+numpy==2.5.5
+httpx==0.28.1
+# server (server/)
+fastapi==0.165.0
+uvicorn==0.54.0
+python-multipart==0.0.34
+rapidocr==3.10.0
+onnxruntime==1.32.0
+pillow==13.0.0
+anthropic==2.12.0
+# tests
+pytest==9.2.0

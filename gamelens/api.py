@@ -1,0 +1,74 @@
+"""HTTP client for the game-lens server (server/: OCR + translation)."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import httpx
+import numpy as np
+
+
+class LensError(RuntimeError):
+    pass
+
+
+class LensClient:
+    def __init__(self, base: str, token_file: Path, transport: httpx.BaseTransport | None = None):
+        self.base = base.rstrip("/")
+        self.token_file = Path(token_file)
+        self.http = httpx.Client(timeout=httpx.Timeout(60, connect=3), transport=transport)
+
+    def _headers(self) -> dict:
+        try:
+            return {"X-Lens-Token": self.token_file.read_text().strip()}
+        except OSError as e:
+            raise LensError(f"อ่าน token ไม่ได้: {self.token_file} (ระบบแปลยังไม่เคยเปิด)") from e
+
+    def _call(self, method: str, path: str, **kw) -> dict:
+        try:
+            r = self.http.request(method, self.base + path, headers=self._headers(), **kw)
+        except httpx.HTTPError as e:
+            raise LensError(f"ต่อ server ไม่ได้ ({self.base}): {e}") from e
+        if r.status_code != 200:
+            try:
+                detail = r.json().get("detail", r.text[:200])
+            except Exception:
+                detail = r.text[:200]
+            raise LensError(f"server HTTP {r.status_code}: {detail}")
+        return r.json()
+
+    def health(self) -> dict:
+        try:
+            return self.http.get(self.base + "/health", timeout=5).json()
+        except (httpx.HTTPError, ValueError) as e:
+            raise LensError(f"ต่อ server ไม่ได้ ({self.base}): {e}") from e
+
+    def ocr_lines(self, bgr: np.ndarray, src_lang: str = "ja") -> dict:
+        ok, png = cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
+        if not ok:
+            raise LensError("encode image failed")
+        files = {"image": ("r.png", png.tobytes(), "image/png")}
+        return self._call("POST", "/ocr/lines", files=files, data={"src_lang": src_lang})
+
+    def translate_lines(self, lines: list[dict], *, series: str, target: str, src_lang: str, engine: str,
+                        allow_cloud: bool, context: list[dict]) -> dict:
+        body = {"lines": lines, "series": series, "target": target, "src_lang": src_lang, "engine": engine,
+                "allow_cloud": allow_cloud, "context": context}
+        return self._call("POST", "/translate/lines", json=body)
+
+    def usage(self) -> dict:
+        return self._call("GET", "/usage")
+
+    def extract_glossary(self, series: str, text: str, target: str, engine: str, allow_cloud: bool) -> dict:
+        body = {"text": text, "target": target, "engine": engine, "allow_cloud": allow_cloud}
+        return self._call("POST", f"/glossary/{series}/extract-text", json=body)
+
+    # --- settings ---------------------------------------------------------------------------------------------
+    def keys(self) -> dict:
+        return self._call("GET", "/config/keys")
+
+    def set_keys(self, keys: dict[str, str]) -> dict:
+        return self._call("PUT", "/config/keys", json=keys)
+
+    def test_engine(self, engine: str, target: str = "th") -> dict:
+        return self._call("POST", f"/config/test/{engine}", params={"target": target})

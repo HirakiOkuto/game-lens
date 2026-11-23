@@ -1,0 +1,113 @@
+"""Choosing the game window: from a list, or by just switching to the game for a moment."""
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QVBoxLayout
+
+from . import win32
+
+SKIP_EXE = {"nvidia overlay.exe", "nvidia share.exe", "gamebar.exe", "gamebarftserver.exe", "explorer.exe", "python.exe", "pythonw.exe", "textinputhost.exe", "applicationframehost.exe",
+            "systemsettings.exe", "shellexperiencehost.exe", "searchapp.exe", "startmenuexperiencehost.exe"}
+
+
+class GamePicker(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("เลือกหน้าต่างเกม")
+        self.resize(560, 500)
+        self.result_window: dict | None = None
+        self.own = {int(parent.winId())} if parent else set()
+        self.own.add(int(self.winId()))
+
+        title = QLabel("เกมของคุณคือหน้าต่างไหน?")
+        title.setObjectName("h2")
+        auto = QPushButton("⚡ ตรวจจับอัตโนมัติ — กดแล้วสลับไปที่เกมภายใน 5 วินาที")
+        auto.setObjectName("primary")
+        auto.clicked.connect(self.start_auto)
+        self.auto_label = QLabel("")
+        self.auto_label.setObjectName("muted")
+        self.search = QLineEdit(placeholderText="ค้นหาชื่อหน้าต่าง…")
+        self.search.textChanged.connect(self.fill)
+        self.list = QListWidget()
+        self.list.itemDoubleClicked.connect(lambda _: self.accept_selected())
+        ok = QPushButton("ใช้หน้าต่างนี้")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self.accept_selected)
+        refresh = QPushButton("รีเฟรช")
+        refresh.clicked.connect(self.fill)
+        cancel = QPushButton("ยกเลิก")
+        cancel.clicked.connect(self.reject)
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+        lay.addWidget(title)
+        lay.addWidget(auto)
+        lay.addWidget(self.auto_label)
+        or_label = QLabel("หรือเลือกจากรายการ:")
+        or_label.setObjectName("muted")
+        lay.addWidget(or_label)
+        lay.addWidget(self.search)
+        lay.addWidget(self.list, 1)
+        row = QHBoxLayout()
+        row.addWidget(refresh)
+        row.addStretch()
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+
+        self.countdown = 0
+        self.timer = QTimer(self, interval=1000, timeout=self.tick)
+        self.fill()
+
+    def windows(self) -> list[dict]:
+        out = []
+        for w in win32.list_windows():
+            if w["exe"].lower() in SKIP_EXE or w["hwnd"] in self.own:
+                continue
+            r = win32.client_rect(w["hwnd"])
+            if not r or r[2] < 320 or r[3] < 200:
+                continue  # games are big windows
+            w["size"] = r[2:]
+            out.append(w)
+        return sorted(out, key=lambda w: -w["size"][0] * w["size"][1])
+
+    def fill(self):
+        q = self.search.text().lower()
+        self.list.clear()
+        for w in self.windows():
+            if q and q not in w["title"].lower() and q not in w["exe"].lower():
+                continue
+            it = QListWidgetItem(f"{w['title']}\n{w['exe']}  •  {w['size'][0]}×{w['size'][1]}")
+            it.setData(Qt.ItemDataRole.UserRole, w)
+            self.list.addItem(it)
+        if self.list.count():
+            self.list.setCurrentRow(0)
+
+    def accept_selected(self):
+        it = self.list.currentItem()
+        if it:
+            self.result_window = it.data(Qt.ItemDataRole.UserRole)
+            self.accept()
+
+    def start_auto(self):
+        self.countdown = 5
+        self.auto_label.setText("สลับไปที่หน้าต่างเกมเลย… 5")
+        self.timer.start()
+
+    def tick(self):
+        self.countdown -= 1
+        if self.countdown > 0:
+            self.auto_label.setText(f"สลับไปที่หน้าต่างเกมเลย… {self.countdown}")
+            return
+        self.timer.stop()
+        fg = win32.foreground()
+        if not fg or fg in self.own:
+            self.auto_label.setText("ยังไม่ได้สลับไปที่เกม ลองอีกครั้ง หรือเลือกจากรายการ")
+            return
+        exe = win32.process_exe(fg)
+        if exe.lower() in SKIP_EXE:
+            self.auto_label.setText(f"หน้าต่างนั้นไม่ใช่เกม ({exe}) ลองอีกครั้ง")
+            return
+        self.result_window = {"hwnd": fg, "title": win32.window_title(fg), "exe": exe}
+        self.accept()
+        self.raise_()

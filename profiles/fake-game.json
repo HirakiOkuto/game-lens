@@ -1,0 +1,39 @@
+{
+  "name": "FakeGame (tools/fake_game.py)",
+  "series": "fake-game",
+  "exe": "",
+  "title": "FakeGame - game-lens test",
+  "src_lang": "ja",
+  "target": "th",
+  "engine": "hymt",
+  "font_family": "Leelawadee UI",
+  "font_scale": 0.9,
+  "stable_ms": 400,
+  "max_wait_ms": 4000,
+  "regions": [
+    {
+      "id": "name",
+      "kind": "name",
+      "rect": [
+        0.12,
+        0.655,
+        0.3,
+        0.06
+      ],
+      "ink": "light",
+      "align": "left"
+    },
+    {
+      "id": "dialog",
+      "kind": "dialog",
+      "rect": [
+        0.12,
+        0.72,
+        0.76,
+        0.22
+      ],
+      "ink": "light",
+      "align": "left"
+    }
+  ]
+}

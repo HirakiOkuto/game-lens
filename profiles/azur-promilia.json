@@ -1,14 +1,37 @@
 {
   "name": "Azur Promilia (JP)",
   "series": "azur-promilia",
-  "exe": "",
+  "exe": "AzurPromiliaJP.exe",
   "title": "",
   "src_lang": "ja",
   "target": "th",
   "engine": "hymt",
   "font_family": "Leelawadee UI",
   "font_scale": 0.9,
-  "stable_ms": 400,
-  "max_wait_ms": 4000,
-  "regions": []
+  "regions": [
+    {
+      "id": "name",
+      "kind": "name",
+      "rect": [
+        0.4,
+        0.7648,
+        0.2,
+        0.0417
+      ],
+      "ink": "light",
+      "align": "center"
+    },
+    {
+      "id": "dialog",
+      "kind": "dialog",
+      "rect": [
+        0.1599,
+        0.8269,
+        0.6797,
+        0.125
+      ],
+      "ink": "light",
+      "align": "center"
+    }
+  ]
 }

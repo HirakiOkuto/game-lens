@@ -20,9 +20,10 @@ import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ocr import NO_SPACE, normalize_lang, read_lines, route
+from ocr import NO_SPACE, normalize_lang, read_lines, read_name, route
 from store import Store
-from translate.engines import REMOTE, EngineError, extract_glossary, get_engine, translate_blocks
+from translate.engines import (REMOTE, EngineError, extract_glossary, fold_name, get_engine, glossary_terms, match_name,
+                               match_term, translate_blocks)
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
@@ -115,15 +116,23 @@ async def ocr_lines(
     image: UploadFile = File(...),
     src_lang: str = Form("ja"),
     min_score: float = Form(0.5),
+    kind: str = Form(""),
+    series: str = Form(""),
+    target: str = Form("th"),
 ):
-    """A screenshot or a crop of one (a dialogue box): its typeset horizontal lines, in reading order."""
+    """A screenshot or a crop of one (a dialogue box): its typeset horizontal lines, in reading order. For
+    kind=name (a speaker-name box) the names of the series' glossary help to read it."""
     src = normalize_lang(src_lang)
     img = decode_image(await image.read())
     t0 = time.perf_counter()
 
     def work():
         with ocr_lock:
-            lines = read_lines(img, src, min_score)
+            if kind == "name" and series:
+                terms = glossary_terms(store.get_glossary(glossary_key(series, target))[1])
+                lines = read_name(img, src, lambda t: (match_term(t, terms) or (None,))[0], fold_name)
+            else:
+                lines = read_lines(img, src, min_score)
         for i, l in enumerate(lines):
             l["id"] = f"l{i}"
         return lines
@@ -176,10 +185,18 @@ async def translate_lines(req: TranslateLinesReq):
     remote_ok = req.engine in REMOTE and req.allow_cloud and get_engine(req.engine).available()
     out: dict[str, str] = {}
     from_cache, todo, engines_used = [], [], []
+    names = glossary_terms(glossary)
     for l in req.lines:
         text = l.src.strip()
         if not text or src.split("-")[0] == req.target or already_in(text, req.target, src):
             out[l.id] = ""
+            continue
+        # a line that is nothing but a known name (a speaker-name box) needs no engine; for name boxes this
+        # also forgives the misreadings OCR makes on short text
+        known = match_name(text, names) if l.kind == "name" else dict(names).get(text)
+        if known:
+            out[l.id] = known
+            engines_used.append("glossary")
             continue
         hit = cached.get(keys[l.id])
         if hit and not (hit[0] not in (req.engine, "none") and remote_ok):

@@ -97,6 +97,34 @@ def _rows(lines: list[dict]) -> list[dict]:
     return [l for row in rows for l in sorted(row, key=lambda t: t["bbox"][0])]
 
 
+def _drop_repeats(lines: list[dict]) -> list[dict]:
+    """The detector sometimes returns a second box for a part of a line it already found: keep the better-read
+    of two boxes that cover the same pixels (the longer text when they are about equally sure)."""
+    keep: list[dict] = []
+    for l in sorted(lines, key=lambda l: (-l["bbox"][2] * l["bbox"][3], -l["conf"])):
+        x, y, w, h = l["bbox"]
+        for k in keep:
+            kx, ky, kw, kh = k["bbox"]
+            iw, ih = min(x + w, kx + kw) - max(x, kx), min(y + h, ky + kh) - max(y, ky)
+            if iw > 0 and ih > 0 and iw * ih > 0.6 * w * h:
+                break
+            # a ghost box hanging off the line it repeats: less overlap, but the text is a piece of that line's
+            if iw > 0.8 * w and ih > 0.2 * h and _is_piece_of(l["text"], k["text"]):
+                break
+        else:
+            keep.append(l)
+    return keep
+
+
+def _is_piece_of(part: str, whole: str) -> bool:
+    import difflib
+
+    if not 3 <= len(part) < len(whole):
+        return False
+    blocks = difflib.SequenceMatcher(None, part, whole, autojunk=False).get_matching_blocks()
+    return sum(b.size for b in blocks) >= 0.75 * len(part)
+
+
 def _tighten(img: np.ndarray, bbox: list[int]) -> list[int]:
     """PP-OCR's detector pads its boxes (and small crops are padded further): shrink a line box to its ink, so
     the box height is the glyph height (the client sizes the translation from it)."""
@@ -147,8 +175,49 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
         lines.append({"bbox": [x0, y0, x1 - x0, y1 - y0], "text": txt.strip(), "conf": round(float(score), 3)})
-    lines = [dict(l, bbox=_tighten(img, l["bbox"])) for l in lines]
+    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"])) for l in lines])
     if lang in NO_SPACE:
         lines = _drop_ruby(lines)
     lines = _rows(lines)
     return lines
+
+
+def _name_variants(img: np.ndarray):
+    """Pictures of a name box with the scene behind the letters pushed away, twice the size (the first reading
+    is of the picture as it is). Bright text on a bright scene is where the plain picture fails."""
+    big = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(big, cv2.COLOR_RGB2GRAY)
+    hi = float(np.percentile(gray, 99))
+    levels = np.clip((gray.astype(np.float32) - (hi - 90)) / 90 * 255, 0, 255).astype(np.uint8)
+    yield cv2.cvtColor(levels, cv2.COLOR_GRAY2RGB)
+    top = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
+    yield cv2.cvtColor(255 - cv2.normalize(top, None, 0, 255, cv2.NORM_MINMAX), cv2.COLOR_GRAY2RGB)
+
+
+def read_name(img: np.ndarray, lang: str, find, fold) -> list[dict]:
+    """A speaker-name box. find(text) -> the known name it is (as the glossary writes it) or None; fold(text)
+    normalises a reading for comparison. The plain reading if it is a known name; otherwise the box is read two
+    more ways and the first known name wins. A name nobody knows is believed only when two readings agree;
+    otherwise [] (better to leave the original on screen than to translate a misreading)."""
+    lines = read_lines(img, lang)
+    readings = [("".join(l["text"] for l in lines), lines)]
+    if (known := find(readings[0][0])):
+        return _named(lines, known)
+    for pic in _name_variants(img):
+        ls = [dict(l, bbox=[v // 2 for v in l["bbox"]]) for l in read_lines(pic, lang)]
+        text = "".join(l["text"] for l in ls)
+        if (known := find(text)):
+            return _named(ls, known)
+        readings.append((text, ls))
+    for i, (text, ls) in enumerate(readings):
+        if text and any(fold(text) == fold(other) for j, (other, _) in enumerate(readings) if j != i):
+            return ls
+    return []
+
+
+def _named(lines: list[dict], name: str) -> list[dict]:
+    """One line carrying the known name, covering everything that was read."""
+    x0, y0 = min(l["bbox"][0] for l in lines), min(l["bbox"][1] for l in lines)
+    x1 = max(l["bbox"][0] + l["bbox"][2] for l in lines)
+    y1 = max(l["bbox"][1] + l["bbox"][3] for l in lines)
+    return [{"bbox": [x0, y0, x1 - x0, y1 - y0], "text": name, "conf": max(l["conf"] for l in lines)}]

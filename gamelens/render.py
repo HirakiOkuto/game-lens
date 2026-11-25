@@ -76,7 +76,7 @@ def _free_run(frame: np.ndarray, b0: int, b1: int, start: int, step: int, limit:
     return int(stop[0]) if len(stop) else cols.shape[1] - 1
 
 
-def _thin_strokes(area_bgr: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray]:
+def _thin_strokes(area_bgr: np.ndarray, h: int, ink: str = "any") -> tuple[np.ndarray, np.ndarray]:
     """(mask, strength) of thin strokes in a picture: how text looks when it is drawn over the game scene or a
     textured panel, where no single background colour exists to compare against. Light strokes or dark ones,
     whichever there are more of: the strokes of a text outnumber the gaps they enclose."""
@@ -86,13 +86,29 @@ def _thin_strokes(area_bgr: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray]
     top = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, k)
     black = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k)
     light, dark = (top > 40) & (gray > 130), black > 35
-    return (light, top) if light.sum() >= dark.sum() else (dark, black)
+    if ink == "light" or (ink == "any" and light.sum() >= dark.sum()):
+        return light, top
+    return dark, black
 
 
-def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None) -> Line | None:
+def over_scene(crop: np.ndarray) -> bool:
+    """Does a watched region lie over the game scene (or a picture) rather than in a dialogue box? Judged on the
+    whole region, so that all its lines are treated alike: a box is one colour or a soft shade, a scene is not."""
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    size = max(9, gray.shape[0] // 4) | 1
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    # opening removes thin light strokes, closing thin dark ones: what is left is the background
+    bg = cv2.morphologyEx(cv2.morphologyEx(gray, cv2.MORPH_OPEN, k), cv2.MORPH_CLOSE, k)
+    return float(np.percentile(bg, 90) - np.percentile(bg, 10)) > 35
+
+
+def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink_kind: str = "any",
+                 scene: bool | None = None) -> Line | None:
     """frame: BGR image; bbox: [x, y, w, h] of one horizontal text line. strokes: optional mask the size of the
     frame of where text strokes have been standing still (from the watcher): for text over a moving scene it
-    tells the glyphs from thin bright details of the scene."""
+    tells the glyphs from thin bright details of the scene. ink_kind: light / dark when it is known which the
+    text is. scene: whether the text is known to lie over the scene (a watched region, see `over_scene`); None
+    judges it from the line itself (menus)."""
     H, W = frame.shape[:2]
     x, y, w, h = (int(v) for v in bbox)
     x0, y0, x1, y1 = max(0, x), max(0, y), min(W, x + w), min(H, y + h)
@@ -123,14 +139,14 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None) -> 
     inner = dist[y0 - ey0 : y1 - ey0, x0 - ex0 : x1 - ex0]
     top = float(np.percentile(inner, 97))
     every = dist > max(24.0, 0.4 * top)
-    # How even is the background? Measured on the frame of pixels just around the text box, which holds almost no
-    # glyph pixels (the 75th percentile shrugs off the few that poke into it).
-    around = np.ones(dist.shape, bool)
-    around[y0 - ey0 : y1 - ey0, x0 - ex0 : x1 - ex0] = False
-    spread = float(np.percentile(dist[around], 75)) if around.any() else 0.0
-    plain = spread < 14
+    # How even is the background? What is neither text nor anything else that stands out from it.
+    rest = area[~cv2.dilate(every.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)]
+    spread = 0.0 if len(rest) < 8 else float(np.abs(rest - bg).max(1).mean())
+    if scene is not None:
+        spread = 99.0 if scene else 0.0
+    plain = spread < 30
     if not plain:  # over a picture, a texture or the scene: no one background colour, look for strokes instead
-        every, dist = _thin_strokes(frame[ey0:ey1, ex0:ex1], h)
+        every, dist = _thin_strokes(frame[ey0:ey1, ex0:ex1], h, ink_kind)
         if strokes is not None:
             still = cv2.dilate(strokes[ey0:ey1, ex0:ex1].astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
             if (every & still).sum() >= 0.3 * every.sum():
@@ -149,8 +165,8 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None) -> 
         glyphish[i] = not leaves and cw <= 6 * h
         solid[i] = glyphish[i] and size >= 4
     ink = glyphish[labels]
-    if not ink.any():  # nothing of the kind (letters joined into one shape across the line): take everything
-        ink, solid = every, np.ones(n, bool)
+    if not ink.any() and every.mean() < 0.35:  # letters joined into one shape across the line: take everything
+        ink, solid = every, np.ones(n, bool)  # (much more than a third of the area is not text at all)
     real = solid[labels] & ink
     rows, cols = np.flatnonzero(real.any(1)), np.flatnonzero(real.any(0))
     gy = (ey0 + int(rows[0]), ey0 + int(rows[-1]) + 1) if len(rows) >= 2 else (y0, y1)
@@ -163,11 +179,20 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None) -> 
         fg = 255 - bg
     else:  # the colour at the heart of the strokes: their soft edges are a blend with the background
         fg = np.median(area[ink & (dist >= np.percentile(dist[ink], 80))], 0)
+    if not plain and ink_kind in ("light", "dark"):  # a scene can fool the measurement: keep text light / dark
+        lum = float(0.114 * fg[0] + 0.587 * fg[1] + 0.299 * fg[2])
+        if ink_kind == "light" and lum < 170:
+            fg = np.array([250.0, 250.0, 250.0])
+        elif ink_kind == "dark" and lum > 110:
+            fg = np.array([40.0, 40.0, 40.0])
     b0 = gy[0] + int(0.2 * (gy[1] - gy[0]))
     b1 = max(b0 + 1, gy[0] + int(0.8 * (gy[1] - gy[0])))
     grow = max(1, round((0.07 if plain else 0.12) * h))  # over a scene: take the glyphs' shadow too
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1, 2 * grow + 1))
-    mask = cv2.dilate(ink.astype(np.uint8) * 255, k)
+    cover = ink
+    if not plain and strokes is not None and every.mean() < 0.35:
+        cover = every  # strokes that stood still are text, also where they run into a detail of the scene
+    mask = cv2.dilate(cover.astype(np.uint8) * 255, k)
     return Line(box=(x0, y0, w, h), fg=_hex(fg), bg=_hex(bg), plain=plain, calm=spread < 35, glyph_y=gy,
                 free_left=_free_run(frame, b0, b1, x0 - 3, -1) if x0 >= 4 else 0,
                 free_right=_free_run(frame, b0, b1, x1 + 2, 1) if x1 + 3 < W else 0,

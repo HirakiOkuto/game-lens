@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -101,7 +102,9 @@ class Settings:
             path.write_text(json.dumps(asdict(s), ensure_ascii=False, indent=2), encoding="utf-8")
             return s
         d = json.loads(path.read_text(encoding="utf-8"))
-        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        s = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+        s.server = os.environ.get("GAMELENS_SERVER", s.server)  # tests and tools can point at another server
+        return s
 
     def resolve(self, rel: str) -> Path:
         p = Path(rel)

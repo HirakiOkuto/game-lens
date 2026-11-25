@@ -20,15 +20,18 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 
-from .engines import EngineError, glossary_terms
+from .engines import EngineError, glossary_terms, terms_in_text
 
 _PUA = 0xE000  # private-use code points: placeholders no source text contains
 
 
 def terms_in(texts: list[str], glossary: dict) -> list[tuple[str, str]]:
-    """Glossary (src, tl) pairs that occur in any of the texts, longest source first."""
-    joined = "\n".join(texts)
-    used = {a: b for a, b in glossary_terms(glossary or {}) if a and b and a in joined}
+    """Glossary (as written in the texts, translation) pairs that occur in any of the texts, longest first."""
+    terms = glossary_terms(glossary or {})
+    used: dict[str, str] = {}
+    for t in texts:
+        for surface, tl in terms_in_text(t, terms):
+            used.setdefault(surface, tl)
     return sorted(used.items(), key=lambda t: -len(t[0]))
 
 

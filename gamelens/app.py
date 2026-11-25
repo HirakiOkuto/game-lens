@@ -2,6 +2,7 @@
 puts the Thai text in place on the overlay. One main window (Panel) plus a tray icon."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -27,7 +28,8 @@ from .panel import Panel
 from .picker import GamePicker
 from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import in_any, lines_to_translate, paragraphs, refresh_patch, region_item, requests, screen_items
+from .screen import (has_source_text, in_any, lines_to_translate, merge_glossary, paragraphs, refresh_patch, region_item,
+                     requests, screen_items)
 from .services import MODEL_NAMES, MODELS, ServerManager
 from .ui_style import QSS
 from .watcher import RegionWatcher, changed_pixels, ink_map, similar, stroke_map
@@ -272,11 +274,29 @@ class Controller(QObject):
             st["health"] = self.api.health()
             st["server"] = True
             if not getattr(self, "_keys_loaded", False):
+                self._keys_loaded = True  # first: two polls can overlap while the server is slow to answer
                 self.bridge.keys.emit(self.api.keys())
-                self._keys_loaded = True
+                self.sync_glossary()
         except LensError:
             self._keys_loaded = False
         self.bridge.status.emit(st)
+
+    def sync_glossary(self):
+        """Names and terms kept in glossaries/<series>.<target>.json go to the server whenever it comes up."""
+        p = self.profile
+        path = ROOT / "glossaries" / f"{p.series}.{p.target}.json"
+        if not path.exists():
+            return
+        try:
+            base = json.loads(path.read_text(encoding="utf-8"))
+            current = self.api.glossary(p.series, p.target)
+            merged = merge_glossary(base, current)
+            if merged != current:
+                ver = self.api.put_glossary(p.series, p.target, merged)
+                log.info("glossary %s: %d names, %d terms (version %d)", path.name, len(merged["characters"]),
+                         len(merged["terms"]), ver)
+        except (LensError, ValueError, OSError) as e:
+            log.warning("glossary %s not loaded: %s", path.name, e)
 
     def on_status(self, st: dict):
         self.health = st["health"]
@@ -558,12 +578,14 @@ class Controller(QObject):
     def _region_payload(self, r, px, crop, gen, strokes=None) -> dict | None:
         p = self.profile
         t0 = time.perf_counter()
-        ocr = self.api.ocr_lines(crop, p.src_lang)
+        ocr = self.api.ocr_lines(crop, p.src_lang, r.kind, p.series, p.target)
         lines = [l for l in ocr["lines"] if l["text"].strip()]
         text = ocr["text"].strip()
         log.info("region %s ocr %d ms: %r", r.id, (time.perf_counter() - t0) * 1000, text)
         if not lines or not text:
             return None
+        if r.kind == "name" and not has_source_text(text, p.src_lang):
+            return None  # a name already in Latin letters (the player's own name) stays as it is
         prev = self.shown.get(r.id)
         if prev and similar(prev["src"], text) >= 0.92:
             return {"reuse": True}
@@ -576,7 +598,7 @@ class Controller(QObject):
         tl = res["lines"].get("a", "")
         log.info("region %s %s %d ms%s: %r", r.id, res.get("engine"), (time.perf_counter() - t1) * 1000,
                  " (cache)" if res.get("cached") else "", tl)
-        item = region_item(crop, px, [l["bbox"] for l in lines], tl, r.kind, r.align, p.font_scale, strokes)
+        item = region_item(crop, px, [l["bbox"] for l in lines], tl, r.kind, r.align, p.font_scale, strokes, r.ink)
         return {"src": text, "tl": tl, "items": [item] if item else [], "engine": res.get("engine", ""), "kind": r.kind}
 
     def on_region_done(self, rid: str, gen: int, payload):

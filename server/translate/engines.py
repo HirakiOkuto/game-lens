@@ -266,7 +266,7 @@ class PlamoTranslateEngine:
         history = [(c["src"], c["tl"]) for c in context if c.get("src") and c.get("tl")]
         out = []
         for text in texts:  # sequential: each box sees the translations of the boxes before it
-            used = [(a, b) for a, b in terms if a in text]  # only terms that occur in this box
+            used = terms_in_text(text, terms)  # only terms that occur in this box
             body = {"prompt": self._prompt(text, history, used, src, target, style), "n_predict": 512, "temperature": 0,
                     "stop": [self.TAG, "<|plamo:bos|>"], "cache_prompt": True}
             try:
@@ -280,6 +280,68 @@ class PlamoTranslateEngine:
             if tl:
                 history.append((text, tl))
         return out
+
+
+# OCR often reads a small kana as its full-size twin (ミィティ -> ミイテイ, メーツァ -> メーツア)
+_SMALL = str.maketrans("ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ", "あいうえおつやゆよわアイウエオツヤユヨワカケ")
+
+
+def fold_kana(s: str) -> str:
+    """Small kana as full-size ones: same length, so positions in the folded text are positions in the text."""
+    return s.translate(_SMALL)
+
+
+def fold_name(s: str) -> str:
+    """For comparing whole names: small kana folded, voicing marks dropped (テララ / デララ), spaces removed."""
+    import unicodedata
+
+    plain = "".join(c for c in unicodedata.normalize("NFD", fold_kana(s)) if unicodedata.category(c) != "Mn")
+    return "".join(plain.split())
+
+
+def terms_in_text(text: str, terms: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Glossary terms that occur in the text, longest first, as (the way it is written in the text, translation).
+    Small kana are compared as full-size ones. A short name that only shows up inside a longer term (the name
+    シャル inside the place シャルル村) is not counted."""
+    used, rest = [], fold_kana(text)
+    for a, b in sorted(terms, key=lambda t: -len(t[0])):
+        fa = fold_kana(a)
+        i = rest.find(fa) if fa else -1
+        if i < 0:
+            continue
+        while i >= 0:
+            surface = text[i : i + len(fa)]
+            if (surface, b) not in used:
+                used.append((surface, b))
+            rest = rest[:i] + "\x00" * len(fa) + rest[i + len(fa) :]
+            i = rest.find(fa)
+    return used
+
+
+def match_term(text: str, terms: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """The glossary entry (source, translation) for a text that is nothing but a known name (a speaker-name box), allowing for the misreadings
+    OCR makes on short text: small kana, voicing marks, or one wrong character in a name of four or more."""
+    import difflib
+
+    want = fold_name(text)
+    if not want:
+        return None
+    best, score = None, 0.0
+    for a, b in terms:
+        fa = fold_name(a)
+        if fa == want:
+            return a, b
+        if len(fa) >= 4 and abs(len(fa) - len(want)) <= 1:
+            r = difflib.SequenceMatcher(None, fa, want, autojunk=False).ratio()
+            if r > score:
+                best, score = (a, b), r
+    return best if score >= 0.75 else None
+
+
+def match_name(text: str, terms: list[tuple[str, str]]) -> str | None:
+    """Its translation, or None."""
+    hit = match_term(text, terms)
+    return hit[1] if hit else None
 
 
 def glossary_terms(glossary: dict) -> list[tuple[str, str]]:
@@ -325,15 +387,39 @@ class HyMtEngine:
         if history:
             bg.append("Earlier lines and their translations:")
             bg += [f"{a} → {b}" for a, b in history[-self.MAX_HISTORY :]]
+        # the model card's own section for terminology: names listed under "background" get transliterated anyway
+        ref = ""
         if glossary:
-            bg.append("Names and terms:")
-            bg += [f"{a} translates to {b}" for a, b in glossary]
+            ref = "[Reference Translations]\n" + "\n".join(f"{a} translates to {b}" for a, b in glossary) + "\n\n"
         return (
-            "[Background Information]\n" + "\n".join(bg) + "\n\n"
+            "[Background Information]\n" + "\n".join(bg) + "\n\n" + ref +
             f"Please translate the following text into {tl}, taking the provided background information into "
             "consideration. Only output the translated result without any additional explanation.\n\n"
             f"[Source Text]\n{text.strip()}"
         )
+
+    def _ask(self, prompt: str) -> str:
+        body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True}
+        try:
+            r = httpx.post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
+        except httpx.HTTPError as e:
+            raise EngineError(f"Hy-MT unreachable at {self.url}: {e}") from e
+        if r.status_code != 200:
+            raise EngineError(f"Hy-MT HTTP {r.status_code}: {r.text[:200]}")
+        return (r.json()["choices"][0]["message"].get("content") or "").strip()
+
+    def _with_slots(self, text: str, history, used: list[tuple[str, str]], target: str, style: str) -> str:
+        """Translate with N1, N2... standing in for the names, then put the names back. '' if a slot got lost."""
+        slots = {}
+        for i, (a, b) in enumerate(used, 1):
+            text = text.replace(a, f"N{i}")
+            slots[f"N{i}"] = b
+        out = self._ask(self._prompt(text, history, [], target, style))
+        for k in sorted(slots, key=len, reverse=True):  # N10 before N1
+            if k not in out:
+                return ""
+            out = out.replace(k, slots[k])
+        return out
 
     def translate_page(self, texts: list[str], src: str, target: str, context: list[dict], glossary: dict,
                        style: str = "manga") -> list[str]:
@@ -341,16 +427,11 @@ class HyMtEngine:
         history = [(c["src"], c["tl"]) for c in context if c.get("src") and c.get("tl")]
         out = []
         for text in texts:
-            used = [(a, b) for a, b in terms if a in text]
-            body = {"messages": [{"role": "user", "content": self._prompt(text, history, used, target, style)}],
-                    "temperature": 0, "max_tokens": 512, "cache_prompt": True}
-            try:
-                r = httpx.post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
-            except httpx.HTTPError as e:
-                raise EngineError(f"Hy-MT unreachable at {self.url}: {e}") from e
-            if r.status_code != 200:
-                raise EngineError(f"Hy-MT HTTP {r.status_code}: {r.text[:200]}")
-            tl = echo_guard((r.json()["choices"][0]["message"].get("content") or "").strip(), text, history)
+            used = terms_in_text(text, terms)
+            tl = echo_guard(self._ask(self._prompt(text, history, used, target, style)), text, history)
+            if tl and any(b not in tl for _, b in used):
+                # a name came out transliterated: once more with stand-ins (these lose some meaning, so only now)
+                tl = self._with_slots(text, history, used, target, style) or tl
             out.append(tl)
             if tl:
                 history.append((text, tl))

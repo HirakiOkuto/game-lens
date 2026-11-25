@@ -217,14 +217,14 @@ def test_translate_lines_cache_glossary_and_skips(monkeypatch, tmp_path):
     monkeypatch.setitem(engines._engines, "local", fake)
     client.put("/glossary/azur-promilia?target=th", json=G, headers=h)
     req = {"series": "azur-promilia", "engine": "local",
-           "lines": [{"id": "n", "src": "ラフィー", "kind": "name"}, {"id": "d", "src": "おはよう、指揮官", "kind": "dialog"},
+           "lines": [{"id": "n", "src": "ジャベリン", "kind": "name"}, {"id": "d", "src": "おはよう、指揮官", "kind": "dialog"},
                      {"id": "x", "src": "OK", "kind": "ui"}, {"id": "e", "src": "  ", "kind": "ui"}],
            "context": [{"src": "前", "tl": "ก่อน"}]}
     d = client.post("/translate/lines", json=req, headers=h).json()
     assert d["lines"] == {"n": "ลาฟีย์", "d": "อรุณสวัสดิ์ ผู้บัญชาการ", "x": "", "e": ""}
     assert d["engine"] == "local" and d["cached"] == []
     system, user = seen[0]
-    assert "นักแปลเกม" in system and "ลาฟีย์" in system and "n\t[name]\tラフィー" in user and "บทพูดก่อนหน้า" in user
+    assert "นักแปลเกม" in system and "ลาฟีย์" in system and "n\t[name]\tジャベリン" in user and "บทพูดก่อนหน้า" in user
     # same lines again: all from cache, no engine call
     d2 = client.post("/translate/lines", json=req, headers=h).json()
     assert d2["lines"] == d["lines"] and sorted(d2["cached"]) == ["d", "n"] and fake.calls == 1
@@ -324,3 +324,107 @@ def test_read_lines_real_pipeline_returns_json_ready_boxes(monkeypatch):
     assert lines and json.dumps(lines)
     x, y, w, h = lines[0]["bbox"]
     assert h <= 26 and y >= 8
+
+
+def test_translate_lines_answers_a_bare_glossary_name_without_an_engine(monkeypatch, tmp_path):
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    fake = FakeEngine([{"lines": [{"id": "d", "tl": "Laffey ง่วงแล้ว"}]}])
+    monkeypatch.setitem(engines._engines, "local", fake)
+    g = {"characters": [{"src": "ラフィー", "aliases": ["ラフィ"], "tl": "Laffey"}], "terms": []}
+    client.put("/glossary/game?target=th", json=g, headers=h)
+    req = {"series": "game", "engine": "local", "lines": [{"id": "n", "src": "ラフィー", "kind": "name"},
+                                                           {"id": "a", "src": " ラフィ ", "kind": "name"}]}
+    d = client.post("/translate/lines", json=req, headers=h).json()
+    assert d["lines"] == {"n": "Laffey", "a": "Laffey"} and d["engine"] == "glossary" and fake.calls == 0
+    d = client.post("/translate/lines", json={**req, "lines": [{"id": "d", "src": "ラフィー、眠い", "kind": "dialog"}]}, headers=h).json()
+    assert d["lines"] == {"d": "Laffey ง่วงแล้ว"} and fake.calls == 1  # a sentence still goes to the engine
+
+
+def test_terms_in_text_prefers_the_longer_term():
+    terms = [("シャル", "Shalle"), ("シャルル村", "หมู่บ้าน Charlulu"), ("テララ", "Terara")]
+    assert engines.terms_in_text("シャルル村へ行こう、テララ", terms) == [("シャルル村", "หมู่บ้าน Charlulu"), ("テララ", "Terara")]
+    assert engines.terms_in_text("シャル、シャルル村だよ", terms) == [("シャルル村", "หมู่บ้าน Charlulu"), ("シャル", "Shalle")]
+    assert engines.terms_in_text("こんにちは", terms) == []
+
+
+def test_glossary_names_survive_ocr_misreadings():
+    terms = [("ミィティ", "Mitty"), ("メーツァ", "Metsa"), ("ファランタ", "Faridah"), ("テララ", "Terara"), ("ノノ", "Nono")]
+    for seen, want in (("ミイテイ", "Mitty"), ("ミイティ", "Mitty"), ("メーッア", "Metsa"), ("フアランタ", "Faridah"),
+                       ("クアランタ", "Faridah"), ("デララ", "Terara"), ("テララ", "Terara"), ("ノノ", "Nono")):
+        assert engines.match_name(seen, terms) == want, seen
+    for other in ("三行", "ララ", "Alehero", "ミィティの父", ""):
+        assert engines.match_name(other, terms) is None, other
+    # inside a sentence: small kana are forgiven, and the engine is told the name the way the text has it
+    assert engines.terms_in_text("ミイティの父が来た", terms) == [("ミイティ", "Mitty")]
+    assert web_engines.lock("ミイティ、行こう", web_engines.terms_in(["ミイティ、行こう"], {"characters": [{"src": "ミィティ", "tl": "Mitty"}]}), "inline") == "Mitty、行こう"
+
+
+def test_hymt_retries_with_stand_ins_when_a_name_is_transliterated(monkeypatch):
+    sent = []
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, c):
+            self._c = c
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._c}}]}
+
+    def fake_post(url, json, timeout):
+        p = json["messages"][0]["content"]
+        sent.append(p)
+        src = p.split("[Source Text]\n")[1]
+        return Resp({"ミイティの父": "พ่อของมิตตี้", "N1の父": "พ่อของ N1", "ノノ": "Nono จ้ะ", "行こう": "ไปกัน"}[src])
+
+    monkeypatch.setattr(engines.httpx, "post", fake_post)
+    g = {"characters": [{"src": "ミィティ", "tl": "Mitty"}, {"src": "ノノ", "tl": "Nono"}], "terms": []}
+    e = engines.HyMtEngine()
+    assert e.translate_page(["ミイティの父"], "ja", "th", [], g, style="game") == ["พ่อของ Mitty"] and len(sent) == 2
+    assert "[Reference Translations]\nミイティ translates to Mitty" in sent[0] and "Reference" not in sent[1]
+    sent.clear()
+    assert e.translate_page(["ノノ", "行こう"], "ja", "th", [], g, style="game") == ["Nono จ้ะ", "ไปกัน"] and len(sent) == 2
+    # a stand-in that gets lost: keep the first answer rather than a broken one
+    monkeypatch.setattr(engines.HyMtEngine, "_ask", lambda self, p: "พ่อของมิตตี้")
+    assert e.translate_page(["ミイティの父"], "ja", "th", [], g, style="game") == ["พ่อของมิตตี้"]
+
+
+def test_overlapping_ocr_boxes_are_read_once():
+    from ocr import _drop_repeats
+
+    whole = {"bbox": [100, 50, 600, 30], "text": "とても立派な方だったんだね。", "conf": 0.98}
+    part = {"bbox": [300, 52, 390, 27], "text": "も立派な方たったんだね", "conf": 0.9}
+    below = {"bbox": [100, 90, 500, 30], "text": "二行目", "conf": 0.9}
+    assert sorted(l["text"] for l in _drop_repeats([part, whole, below])) == sorted([whole["text"], below["text"]])
+
+
+def test_ghost_line_that_repeats_a_piece_of_another_is_dropped():
+    from ocr import _drop_repeats
+
+    line = {"bbox": [374, 0, 556, 44], "text": "ミィティのお父さん……とても立派な方だったんだね。", "conf": 0.99}
+    ghost = {"bbox": [665, 8, 248, 88], "text": "も立派な方たったんだね", "conf": 0.94}
+    second = {"bbox": [400, 46, 500, 44], "text": "本当にそう思うよ。", "conf": 0.95}
+    assert [l["text"] for l in _drop_repeats([line, ghost, second])] == [line["text"], second["text"]]
+
+
+def test_read_name_lets_the_glossary_pick_the_right_reading(monkeypatch):
+    import ocr
+
+    terms = [("ミィティ", "Mitty"), ("テララ", "Terara")]
+    find = lambda t: (engines.match_term(t, terms) or (None,))[0]  # noqa: E731
+    img = np.zeros((45, 384, 3), np.uint8)
+
+    def readings(*texts):
+        it = iter(texts)
+        monkeypatch.setattr(ocr, "read_lines", lambda pic, lang: [
+            {"bbox": [100, 10, 80, 20], "text": t, "conf": 0.8}] if (t := next(it)) else [])
+
+    readings("テララ")  # known at once: read only once
+    assert ocr.read_name(img, "ja", find, engines.fold_name)[0]["text"] == "テララ"
+    readings("三行", "ミイテイ")  # misread over a bright scene; the second reading is a known name
+    got = ocr.read_name(img, "ja", find, engines.fold_name)
+    assert got[0]["text"] == "ミィティ" and got[0]["bbox"] == [50, 5, 40, 10]  # glossary spelling, box in the original's pixels
+    readings("ミィティの父", "ミイティの父", "77")  # not in the glossary, but two readings agree: a real name
+    assert ocr.read_name(img, "ja", find, engines.fold_name)[0]["text"] == "ミィティの父"
+    readings("三行", "美", "")  # nobody knows it and the readings disagree: leave the original on screen
+    assert ocr.read_name(img, "ja", find, engines.fold_name) == []

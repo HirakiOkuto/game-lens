@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from .overlay import Item, text_rect_for, to_qimage
-from .render import SIZE_FACTOR, Line, analyze_line, erase_lines, outline_for
+from .render import SIZE_FACTOR, Line, analyze_line, erase_lines, luminance, outline_for, over_scene
 
 # characters of the source script: a line without any is a number, a resolution, "OFF", "TAA"... and stays as it is
 SCRIPT = {
@@ -137,7 +137,7 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
 
 
 def region_item(crop: np.ndarray, px: tuple[int, int, int, int], boxes: list[list[int]], text: str, kind: str,
-                align: str, font_scale: float, strokes: np.ndarray | None = None) -> Item | None:
+                align: str, font_scale: float, strokes: np.ndarray | None = None, ink: str = "any") -> Item | None:
     """Overlay item for one watched region (a dialogue box, a speaker name): crop is the region's picture, px its
     place in the game's client area, boxes the OCR line boxes inside the crop, text the translation, strokes the
     watcher's map of strokes that have been standing still (any size; it is scaled to the crop)."""
@@ -145,15 +145,24 @@ def region_item(crop: np.ndarray, px: tuple[int, int, int, int], boxes: list[lis
         return None
     if strokes is not None and strokes.shape != crop.shape[:2]:
         strokes = cv2.resize(strokes.astype(np.uint8), (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
-    looks = [a for b in boxes if (a := analyze_line(crop, b, strokes)) is not None]
+    scene = over_scene(crop)
+    looks = [a for b in boxes if (a := analyze_line(crop, b, strokes, ink, scene)) is not None]
     patch = erase_lines(crop, looks)
     fg = looks[0].fg if looks else "#ffffff"
-    heights = sorted(a.glyph_h for a in looks) or sorted(b[3] for b in boxes)
-    size = min(heights[len(heights) // 2] * SIZE_FACTOR, 0.8 * px[3])  # never taller than the region
+    # the lines of one region are set in one size; a line whose strokes were partly lost measures too small
+    height = max((a.glyph_h for a in looks), default=0) or max(b[3] for b in boxes)
+    if scene:  # strokes lost against a bright scene shorten the measurement: not below most of the line's box
+        tight = sorted(b[3] for b in boxes)[0]
+        height = max(height, 0.6 * min(tight, 0.6 * px[3] if kind == "name" else 0.3 * px[3]))
+    size = min(height * SIZE_FACTOR, 0.8 * px[3])  # never taller than the region
     plain = all(a.plain for a in looks)
-    calm = all(a.calm for a in looks)
-    item = Item(rect=text_rect_for(px, boxes, kind, align), text=text, fg=fg,
-                outline=outline_for(fg, looks[0].bg, calm) if looks else "",
+    if not looks:
+        outline = ""
+    elif plain:
+        outline = outline_for(fg, looks[0].bg, True)
+    else:  # over the scene: what is behind the text keeps changing, so the outline follows the text alone
+        outline = "#101010" if luminance(fg) > 128 else "#f4f4f4"
+    item = Item(rect=text_rect_for(px, boxes, kind, align), text=text, fg=fg, outline=outline,
                 max_px=max(12.0, size * font_scale), vcenter=kind != "dialog", align=align, bold=kind == "name",
                 patch=to_qimage(patch) if patch is not None else None, patch_pos=(px[0], px[1]))
     item._scale = font_scale
@@ -171,3 +180,14 @@ def refresh_patch(item: Item, crop: np.ndarray):
     patch = erase_lines(crop, lines)
     if patch is not None:
         item.patch = to_qimage(patch)
+
+
+def merge_glossary(base: dict, server: dict) -> dict:
+    """The glossary file (base) wins for every name it has; names only the server knows (found from the game's
+    own text with the history window's button) are kept after them."""
+    out = {}
+    for part in ("characters", "terms"):
+        mine = [e for e in base.get(part, []) if e.get("src")]
+        have = {e["src"] for e in mine}
+        out[part] = mine + [e for e in server.get(part, []) if e.get("src") and e["src"] not in have]
+    return out

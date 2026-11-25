@@ -25,7 +25,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from gamelens.api import LensClient  # noqa: E402
 from gamelens.overlay import Overlay  # noqa: E402
 from gamelens.profile import REMOTE, Profile, Settings  # noqa: E402
-from gamelens.screen import refresh_patch, region_item  # noqa: E402
+from gamelens.screen import has_source_text, refresh_patch, region_item  # noqa: E402
 from gamelens.watcher import RegionWatcher, similar, stroke_map  # noqa: E402
 
 TICK = 0.05  # the app looks at the game 20 times a second
@@ -66,6 +66,8 @@ def main():
     api = LensClient(st.server, st.resolve(st.token_file))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    for stale in out.glob("line_*.png"):  # pictures of an earlier run would pass for this one
+        stale.unlink()
 
     regions = []
     for i, spec in enumerate(a.region):
@@ -124,10 +126,10 @@ def main():
                 s["changed_at"] = t
             elif ev == "stable":
                 wall = time.perf_counter()
-                ocr = api.ocr_lines(crop, prof.src_lang)
+                ocr = api.ocr_lines(crop, prof.src_lang, r["kind"], prof.series, prof.target)
                 text = ocr["text"].strip()
                 lines = [l for l in ocr["lines"] if l["text"].strip()]
-                if not text:
+                if not text or (r["kind"] == "name" and not has_source_text(text, prof.src_lang)):
                     continue
                 prev = s["shown"]
                 if prev and similar(prev["src"], text) >= 0.92:
@@ -143,7 +145,7 @@ def main():
                 took = time.perf_counter() - wall
                 tl = res["lines"].get("a", "")
                 item = region_item(crop, r["px"], [l["bbox"] for l in lines], tl, r["kind"], r["align"], prof.font_scale,
-                                   s["w"].persistent)
+                                   s["w"].persistent, a.ink)
                 s["pending"] = {"ready": t + took, "gen": s["gen"], "item": item, "src": text, "tl": tl, "took": took,
                                 "stable_at": t, "since_change": t - (s["changed_at"] or t),
                                 "cached": bool(res.get("cached")), "engine": res.get("engine")}

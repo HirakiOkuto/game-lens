@@ -393,3 +393,40 @@ def test_paragraphs_join_running_text_but_not_list_rows():
     assert it.rect[2] >= 380 and it.rect[3] >= 70  # as wide as the longest line at least, and all its lines deep
     for y in (110, 137, 164):
         assert it.patch.pixelColor(100, y).alpha() > 0  # every original line is covered
+
+
+def test_merge_glossary_file_wins_and_server_only_names_stay():
+    from gamelens.screen import merge_glossary
+
+    base = {"characters": [{"src": "テララ", "tl": "Terara"}], "terms": [{"src": "キボ", "tl": "Kibo"}]}
+    server = {"characters": [{"src": "テララ", "tl": "เทราระ"}, {"src": "ファランタ", "tl": "ฟาลันตา"}], "terms": []}
+    m = merge_glossary(base, server)
+    assert [c["tl"] for c in m["characters"]] == ["Terara", "ฟาลันตา"] and m["terms"] == [{"src": "キボ", "tl": "Kibo"}]
+    assert merge_glossary(base, m) == m  # nothing to send the second time
+
+
+def test_region_item_light_text_over_a_bright_scene():
+    from gamelens.render import luminance
+    from gamelens.screen import region_item
+
+    crop = np.full((50, 384, 3), (60, 130, 90), np.uint8)  # grass, with bright skin and cloth in front of it
+    crop[:, :170] = (170, 190, 220)
+    cv2.circle(crop, (250, 20), 22, (200, 200, 205), -1)
+    cv2.putText(crop, "Name", (150, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (250, 250, 250), 2, cv2.LINE_AA)
+    it = region_item(crop, (768, 826, 384, 50), [[0, 0, 384, 50]], "Symphoria", "name", "center", 0.9, None, "light")
+    assert luminance(it.fg) > 170 and it.outline == "#101010"  # stays light text with a dark outline
+    if it.patch is not None:  # the cover is the glyphs, not a slab over the whole box
+        covered = sum(it.patch.pixelColor(x, y).alpha() > 128 for x in range(0, 384, 4) for y in range(0, 50, 4))
+        assert covered < 0.4 * 96 * 13
+
+
+def test_heading_whose_box_pokes_out_of_its_bar_stays_plain():
+    """The settings screen's section headings: OCR boxes taller than the dark bar the text sits on."""
+    from gamelens.render import analyze_line, luminance
+
+    img = np.full((120, 600, 3), (215, 205, 190), np.uint8)
+    cv2.rectangle(img, (30, 42), (570, 65), (63, 64, 66), -1)
+    cv2.putText(img, "Custom setting", (45, 59), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (215, 214, 213), 1, cv2.LINE_AA)
+    a = analyze_line(img, [32, 38, 150, 31])
+    assert a.plain and luminance(a.bg) < 90 and luminance(a.fg) > 160
+    assert a.glyph_h <= 18 and 40 <= a.box[0] <= 48  # the glyphs, not the bar's edges

@@ -35,7 +35,7 @@ def main():
     engine = a.engine or prof.engine
     api = LensClient(st.server, st.resolve(st.token_file))
     frame = cv2.imread(a.image)
-    ocr = api.ocr_lines(frame, prof.src_lang)
+    ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
     lines = lines_to_translate(ocr["lines"], [], prof.src_lang)
     groups = paragraphs(lines)
     res = api.translate_lines(requests(groups, prof.src_lang), series=prof.series, target=prof.target,

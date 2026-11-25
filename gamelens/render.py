@@ -21,6 +21,7 @@ class Line:
     free_right: int
     mask: np.ndarray  # uint8 mask of glyph pixels, for the area `mask_box`
     mask_box: tuple[int, int, int, int]  # x0, y0, x1, y1
+    run: np.ndarray | None = None  # for how many looks in a row each pixel has been part of a stroke (learn_strokes)
 
     @property
     def glyph_h(self) -> int:
@@ -87,6 +88,11 @@ def _thin_strokes(area_bgr: np.ndarray, h: int, ink: str = "any") -> tuple[np.nd
     black = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, k)
     light, dark = (top > 40) & (gray > 130), black > 35
     if ink == "light" or (ink == "any" and light.sum() >= dark.sum()):
+        # white text on a nearly white scene barely stands out: lower the bar until there is as much ink as text has
+        for bar in (28, 18):
+            if light.mean() >= 0.08:
+                break
+            light = (top > bar) & (gray > 150)
         return light, top
     return dark, black
 
@@ -150,7 +156,12 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
         if strokes is not None:
             still = cv2.dilate(strokes[ey0:ey1, ex0:ex1].astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
             if (every & still).sum() >= 0.3 * every.sum():
-                every &= still
+                # whole strokes: one that stood still in good part counts all along, also where it got lost for a moment
+                n, labels = cv2.connectedComponents(every.astype(np.uint8), connectivity=8)
+                share = np.bincount(labels[still], minlength=n) / np.maximum(1, np.bincount(labels.ravel(), minlength=n))
+                whole = share >= 0.4
+                whole[0] = False
+                every = (every & still) | whole[labels]
     # Glyphs are connected shapes that lie inside the line. A shape that runs out of the area around the line
     # is something else that merely reaches into it: a border, the rest of an icon, a different background
     # (the box poking out of a bar). A very long one is an underline. Those are neither measured nor erased.
@@ -187,7 +198,8 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
             fg = np.array([40.0, 40.0, 40.0])
     b0 = gy[0] + int(0.2 * (gy[1] - gy[0]))
     b1 = max(b0 + 1, gy[0] + int(0.8 * (gy[1] - gy[0])))
-    grow = max(1, round((0.07 if plain else 0.12) * h))  # over a scene: take the glyphs' shadow too
+    # in a watched region: take the glyphs' shadow too
+    grow = max(1, round((0.07 if scene is None and plain else 0.12) * h))
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * grow + 1, 2 * grow + 1))
     cover = ink
     if not plain and strokes is not None and every.mean() < 0.35:
@@ -197,6 +209,44 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
                 free_left=_free_run(frame, b0, b1, x0 - 3, -1) if x0 >= 4 else 0,
                 free_right=_free_run(frame, b0, b1, x1 + 2, 1) if x1 + 3 < W else 0,
                 mask=mask, mask_box=(ex0, ey0, ex1, ey1))
+
+
+def learn_strokes(line: Line, frame: np.ndarray, need: int = 4) -> bool:
+    """Text over the scene stands still while the scene moves: whatever keeps being a stroke there, look after look,
+    is text too, and is covered from now on (the first look may have missed it). True when something was added."""
+    x0, y0, x1, y1 = line.mask_box
+    h = line.box[3]
+    m = max(2, int(0.3 * h))
+    ax0, ay0 = max(0, x0 - m), max(0, y0 - m)
+    strokes, _ = _thin_strokes(frame[ay0 : y1 + m, ax0 : x1 + m], h, "light" if luminance(line.fg) > 128 else "dark")
+    strokes = strokes[y0 - ay0 : y1 - ay0, x0 - ax0 : x1 - ax0]
+    if line.run is None:
+        line.run = np.zeros(line.mask.shape, np.uint8)
+    line.run = np.where(strokes, np.minimum(line.run, 250) + 1, 0).astype(np.uint8)
+    new = (line.run >= need) & (line.mask == 0)
+    if new.sum() < 6 or (new | (line.mask > 0)).mean() > 0.85:
+        return False
+    g = max(1, round(0.08 * h))
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * g + 1, 2 * g + 1))
+    line.mask = line.mask | cv2.dilate(new.astype(np.uint8) * 255, k)
+    return True
+
+
+def inpaint(crop: np.ndarray, mask: np.ndarray, h: int) -> np.ndarray:
+    """crop with the pixels of mask filled in from around them. This runs on every tick for text over the scene, so
+    taller lines (1080p and up) are filled at a fraction of their size; what is filled in is blurry anyway."""
+    k = 1 if h <= 22 else 2 if h <= 44 else 3
+    if k == 1:
+        return cv2.inpaint(crop, mask, 3, cv2.INPAINT_TELEA)
+    H, W = mask.shape
+    size = (max(1, W // k), max(1, H // k))
+    # averaged over the pixels that are not text, so nothing of it bleeds into the small picture
+    keep = (mask == 0).astype(np.float32)
+    weight = cv2.resize(keep, size, interpolation=cv2.INTER_AREA)
+    small = cv2.resize(crop.astype(np.float32) * keep[..., None], size, interpolation=cv2.INTER_AREA) / np.maximum(weight, 0.05)[..., None]
+    hole = (weight < 0.4).astype(np.uint8) * 255
+    small = cv2.inpaint(np.clip(small, 0, 255).astype(np.uint8), hole, 3, cv2.INPAINT_TELEA)
+    return cv2.resize(small, (W, H), interpolation=cv2.INTER_LINEAR)
 
 
 def erase_lines(frame: np.ndarray, lines: list[Line]) -> np.ndarray | None:
@@ -214,7 +264,7 @@ def erase_lines(frame: np.ndarray, lines: list[Line]) -> np.ndarray | None:
         crop = frame[cy0:cy1, cx0:cx1]
         mask = np.zeros(crop.shape[:2], np.uint8)
         mask[ey0 - cy0 : ey1 - cy0, ex0 - cx0 : ex1 - cx0] = l.mask
-        filled = cv2.inpaint(crop, mask, 3, cv2.INPAINT_TELEA)
+        filled = inpaint(crop, mask, l.box[3])
         alpha = cv2.GaussianBlur(mask, (0, 0), 0.8)
         alpha[mask > 0] = 255
         dst = out[cy0:cy1, cx0:cx1]

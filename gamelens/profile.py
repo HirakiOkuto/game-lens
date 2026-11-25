@@ -57,8 +57,6 @@ class Profile:
     engine: str = "hymt"
     font_family: str = "Leelawadee UI"
     font_scale: float = 0.9  # Thai size relative to the Japanese line height
-    stable_ms: int = 400  # text must be still this long before it is read
-    max_wait_ms: int = 4000  # ...but a box that never stops changing is read after this long anyway
     regions: list[Region] = field(default_factory=list)
     path: str = ""
 

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections import defaultdict, deque
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 
@@ -28,11 +28,11 @@ from .panel import Panel
 from .picker import GamePicker
 from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import (has_source_text, in_any, lines_to_translate, merge_glossary, paragraphs, refresh_patch, region_item,
-                     requests, screen_items)
+from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
+                     requests, screen_items, translate_region)
 from .services import MODEL_NAMES, MODELS, ServerManager
 from .ui_style import QSS
-from .watcher import RegionWatcher, changed_pixels, ink_map, similar, stroke_map
+from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
 INSTANCE_KEY = os.environ.get("GAMELENS_INSTANCE", "game-lens-ui")  # one running copy per key (tests use their own)
@@ -55,14 +55,14 @@ class HotkeyFilter(QAbstractNativeEventFilter):
 
 class Bridge(QObject):
     """Worker threads -> UI thread."""
-    region_done = Signal(str, int, object)
+    region_read = Signal(str, object, object)
+    region_done = Signal(str, object, object)
     screen_done = Signal(int, object)
     message = Signal(str, str)
     status = Signal(dict)
     server_state = Signal(str, str)
     engine_test = Signal(dict)
     keys = Signal(dict)
-    pending = Signal(str, int, object)
 
 
 def app_icon() -> QIcon:
@@ -139,8 +139,9 @@ class Controller(QObject):
         self.profile = Profile.load(ppath)
         self.api = LensClient(self.settings.server, self.settings.resolve(self.settings.token_file))
         self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir))
-        self.pool = ThreadPoolExecutor(3)
+        self.pool = ThreadPoolExecutor(8)  # reading and translating several regions at once, status polls, screens
         self.bridge = Bridge()
+        self.bridge.region_read.connect(self.on_region_read)
         self.bridge.region_done.connect(self.on_region_done)
         self.bridge.screen_done.connect(self.on_screen_done)
         self.bridge.message.connect(self._tray_message)
@@ -148,7 +149,6 @@ class Controller(QObject):
         self.bridge.server_state.connect(lambda s, d: self.refresh_panel())
         self.bridge.engine_test.connect(self.on_engine_test)
         self.bridge.keys.connect(lambda k: self.panel.set_keys(k))
-        self.bridge.pending.connect(lambda rid, gen, at: self.overlay.set_pending(rid, at) if gen == self.gen[rid] else None)
 
         self.overlay = Overlay(self.profile.font_family)
         self.overlay.winId()  # native window exists from the start: hotkeys are delivered to it
@@ -160,10 +160,14 @@ class Controller(QObject):
         self.cap: GameCapture | None = None
         self.enabled = True
         self.health: dict | None = None
-        self.watchers: dict[str, RegionWatcher] = {}
-        self.gen: dict[str, int] = defaultdict(int)
-        self.busy: set[str] = set()
+        self.watchers: dict[str, TextFollower] = {}
         self.shown: dict[str, dict] = {}
+        self.shown_seq: dict[str, int] = {}
+        self.region_active = 0.0  # when text in a region last changed
+        self.auto_empties = 0  # times in a row that auto mode found nothing to translate
+        self.held: dict[str, tuple] = {}  # translations that wait for a line to be read once more
+        self.readings: dict[str, dict] = {}  # what was read last in each region
+        self.sizes: dict[str, TextSize] = {}
         self.context: deque = deque(maxlen=self.settings.context_lines)
         self.screen_gen = 0
         self.screen_ref: np.ndarray | None = None
@@ -394,6 +398,7 @@ class Controller(QObject):
         for k, v in kw.items():
             setattr(self.profile, k, v)
         self.profile.save()
+        self.shown_seq.clear()
         self.shown.clear()  # translate again with the new settings
         self.reset_watchers()
 
@@ -495,9 +500,8 @@ class Controller(QObject):
             self.show_panel()
 
     def reset_watchers(self):
-        self.watchers = {r.id: RegionWatcher(self.profile.stable_ms, self.profile.max_wait_ms) for r in self.profile.regions}
-        for r in self.profile.regions:
-            self.gen[r.id] += 1
+        paid = self.profile.engine in REMOTE and self.profile.engine != "google_free"
+        self.watchers = {r.id: TextFollower(confirm=paid) for r in self.profile.regions}
         self.overlay.clear()
 
     # --- main loop --------------------------------------------------------------------------------------------
@@ -535,99 +539,117 @@ class Controller(QObject):
             x, y, w, h = px
             crop = frame[y : y + h, x : x + w]
             wt = self.watchers[r.id]
-            was = wt.stable_s
             ev = wt.feed(stroke_map(crop, r.ink), now)
-            if wt.stable_s != was:
-                log.info("region %s: waits %d ms for text to settle now", r.id, wt.stable_s * 1000)
-            if ev == "changed":
-                self.gen[r.id] += 1
+            if ev == "hide":
+                self.region_active = now
                 self.overlay.clear(r.id)  # never leave an old translation over new text
                 self.overlay.set_pending(r.id, None)
-            elif ev == "stable":
+            elif ev == "read":
                 if not self.health:
-                    self.watchers[r.id].force(now)  # the server is still starting: read it once it is up
+                    wt.again()  # the server is still starting
+                    wt.read_at = now + 0.5
                     if now - self.waiting_toast > 15:
                         self.waiting_toast = now
                         self.toast("กำลังเปิดระบบแปล… รอสักครู่", 3)
                     continue
-                if r.id in self.busy:
-                    self.watchers[r.id].force(now)  # read again once the running request is back
-                    continue
-                self.busy.add(r.id)
-                self.pool.submit(self.job_region, r, px, crop.copy(), self.gen[r.id], wt.persistent)
-            else:
-                # text over the moving scene: paint the covered glyphs again from this frame, so what hides
-                # them moves with the scene instead of standing still on top of it
-                live = [it for it in self.overlay.items.get(r.id, ()) if getattr(it, "_live", False)]
-                for it in live:
-                    refresh_patch(it, crop)
-                if live:
-                    self.overlay.update()
+                self.pool.submit(self.job_read, r, px, crop.copy(), wt, frame.shape[0])
+            # text over the moving scene: paint the covered glyphs again from this frame, so what hides them moves
+            # with the scene instead of standing still on top of it
+            live = [it for it in self.overlay.items.get(r.id, ()) if getattr(it, "_live", False)]
+            for it in live:
+                refresh_patch(it, crop)
+            if live:
+                self.overlay.update()
 
-    def job_region(self, r, px, crop: np.ndarray, gen: int, strokes=None):
+    def job_read(self, r, px, crop: np.ndarray, wt: TextFollower, frame_h: int):
+        """Worker: read a region. The result goes through the UI thread, which owns the follower."""
         try:
-            payload = self._region_payload(r, px, crop, gen, strokes)
-        except LensError as e:
-            log.warning("region %s: %s", r.id, e)
-            payload = {"error": str(e)}
+            got = ocr_region(self.api, crop, r.kind, r.align, self.profile, frame_h)
         except Exception as e:  # noqa: BLE001 - a worker must always report back
-            log.exception("region %s failed", r.id)
-            payload = {"error": f"{type(e).__name__}: {e}"}
-        self.bridge.region_done.emit(r.id, gen, payload)
+            log.warning("region %s read: %s", r.id, e) if isinstance(e, LensError) else log.exception("region %s read", r.id)
+            got = {"error": str(e) if isinstance(e, LensError) else f"{type(e).__name__}: {e}"}
+        self.bridge.region_read.emit(r.id, wt, (r, px, crop, got))
 
-    def _region_payload(self, r, px, crop, gen, strokes=None) -> dict | None:
-        p = self.profile
-        t0 = time.perf_counter()
-        ocr = self.api.ocr_lines(crop, p.src_lang, r.kind, p.series, p.target)
-        lines = [l for l in ocr["lines"] if l["text"].strip()]
-        text = ocr["text"].strip()
-        log.info("region %s ocr %d ms: %r", r.id, (time.perf_counter() - t0) * 1000, text)
-        if not lines or not text:
-            return None
-        if r.kind == "name" and not has_source_text(text, p.src_lang):
-            return None  # a name already in Latin letters (the player's own name) stays as it is
-        prev = self.shown.get(r.id)
-        if prev and similar(prev["src"], text) >= 0.92:
-            return {"reuse": True}
-        # tell the UI a translation is on its way (dots at the region's top-right corner)
-        self.bridge.pending.emit(r.id, gen, (px[0] + px[2], px[1] + 4))
-        t1 = time.perf_counter()
-        ctx = list(self.context) if r.kind != "name" else []
-        res = self.api.translate_lines([{"id": "a", "src": text, "kind": r.kind}], series=p.series, target=p.target,
-                                       src_lang=p.src_lang, engine=p.engine, allow_cloud=p.engine in REMOTE, context=ctx)
-        tl = res["lines"].get("a", "")
-        log.info("region %s %s %d ms%s: %r", r.id, res.get("engine"), (time.perf_counter() - t1) * 1000,
-                 " (cache)" if res.get("cached") else "", tl)
-        item = region_item(crop, px, [l["bbox"] for l in lines], tl, r.kind, r.align, p.font_scale, strokes, r.ink)
-        return {"src": text, "tl": tl, "items": [item] if item else [], "engine": res.get("engine", ""), "kind": r.kind}
-
-    def on_region_done(self, rid: str, gen: int, payload):
-        self.busy.discard(rid)
-        self.overlay.set_pending(rid, None)
-        if isinstance(payload, dict) and "error" in payload:
-            msg, at = self.last_error
-            if payload["error"] != msg or time.monotonic() - at > 20:  # do not repeat the same error every line
-                self.last_error = (payload["error"], time.monotonic())
-                self.toast(friendly_error(payload["error"]), 4)
+    def on_region_read(self, rid: str, wt: TextFollower, data):
+        r, px, crop, got = data
+        now = time.monotonic()
+        if wt is not self.watchers.get(rid):
+            return  # the regions were edited meanwhile
+        if got and "error" in got:
+            wt.again()
+            wt.read_at = now + 2  # not again at once
+            self.show_error(got["error"])
             return
-        if gen != self.gen[rid]:
-            return  # the text changed while we were reading it; a newer read is coming
-        if payload is None:
-            self.shown.pop(rid, None)
+        what = wt.on_read(got["text"] if got else "", now)
+        if got:
+            self.readings[rid] = got
+        if what or (got and not wt.settled):
+            self.region_active = now  # something is being said: no time to read the whole screen
+        if what == "hide":
+            self.overlay.clear(rid)
+            self.overlay.set_pending(rid, None)
+        if rid in self.held:
+            self.on_region_done(rid, *self.held.pop(rid))
+        if what is None and got and wt.settled:
+            for it in self.overlay.items.get(rid, ()):
+                extend_item(it, crop, got["lines"], r.ink, wt.persistent)
+        if what != "translate" or not self.enabled:
             return
-        if payload.get("reuse"):
-            prev = self.shown.get(rid)
-            if prev:
+        prev = self.shown.get(rid)
+        if prev and similar(prev["src"], got["text"]) >= 0.92 and not wt.corrected:
+            if prev["items"] and self.overlay.items.get(rid) is not prev["items"]:
                 self.overlay.set_items(rid, prev["items"])
             return
-        self.shown[rid] = payload
+        if prev and not wt.corrected and not goes_on(prev["src"], got["text"]):
+            self.overlay.clear(rid)  # another text: nothing old may stay over it
+        log.info("region %s ocr %d ms: %r", rid, got["ms"], got["text"])
+        self.overlay.set_pending(rid, (px[0] + px[2], px[1] + 4))  # dots: a translation is on its way
+        self.pool.submit(self.job_translate, r, px, crop, got, wt, (wt.seq, wt.line), wt.persistent)
+
+    def job_translate(self, r, px, crop: np.ndarray, got: dict, wt: TextFollower, seq: tuple[int, int], strokes):
+        t0 = time.perf_counter()
+        try:
+            res = translate_region(self.api, crop, px, got, r.kind, r.align, r.ink, self.profile, list(self.context), strokes,
+                                   self.sizes.setdefault(r.id, TextSize()), self.profile.engine in REMOTE)
+            log.info("region %s %s %d ms%s: %r", r.id, res["engine"], (time.perf_counter() - t0) * 1000,
+                     " (cache)" if res["cached"] else "", res["tl"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("region %s: %s", r.id, e) if isinstance(e, LensError) else log.exception("region %s failed", r.id)
+            res = {"error": str(e) if isinstance(e, LensError) else f"{type(e).__name__}: {e}"}
+        self.bridge.region_done.emit(r.id, (wt, seq, got), res)
+
+    def show_error(self, error: str):
+        msg, at = self.last_error
+        if error != msg or time.monotonic() - at > 20:  # do not repeat the same error every line
+            self.last_error = (error, time.monotonic())
+            self.toast(friendly_error(error), 4)
+
+    def on_region_done(self, rid: str, which, payload: dict):
+        wt, (seq, line), got = which
+        if wt is not self.watchers.get(rid) or line != wt.line:
+            return  # the text was replaced while it was being translated
+        if wt.in_doubt:
+            self.held[rid] = (which, payload)  # until the next reading has come in
+            return
+        if seq != wt.seq:  # more was typed meanwhile: better its beginning in the player's language than nothing
+            if seq > self.shown_seq.get(rid, -1) and payload.get("items") and begins(got, self.readings[rid]):
+                self.shown[rid], self.shown_seq[rid] = payload, seq
+                self.overlay.set_items(rid, payload["items"])
+            return
+        self.overlay.set_pending(rid, None)
+        if "error" in payload:
+            wt.again()
+            wt.read_at = time.monotonic() + 2
+            self.show_error(payload["error"])
+            return
+        self.shown[rid], self.shown_seq[rid] = payload, seq
         self.overlay.set_items(rid, payload["items"])
         if payload["tl"]:
             e = self.history.add(payload["kind"], payload["src"], payload["tl"], payload["engine"])
             if self.history_win:
                 self.history_win.append(e)
             if payload["kind"] != "name":
-                self.context.append({"src": payload["src"], "tl": payload["tl"]})
+                remember(self.context, payload["src"], payload["tl"])
 
     # --- whole-screen mode (menus, item descriptions) ---------------------------------------------------------
     def translate_screen(self):
@@ -654,7 +676,8 @@ class Controller(QObject):
         if not auto:
             self.toast("กำลังแปลทั้งหน้าจอ… (F9 / Esc ปิด)", 2)
         # lines inside a region that is showing its own translation are left to that region
-        skip = [region_px(r.rect, frame.shape) for r in self.profile.regions if self.overlay.items.get(r.id)]
+        skip = [region_px(r.rect, frame.shape) for r in self.profile.regions
+                if self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text]
         self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
 
     def auto_screen_tick(self, frame: np.ndarray, now: float):
@@ -665,9 +688,17 @@ class Controller(QObject):
         if prev is None or changed_pixels(prev, m) > 0.01 * m.size:
             self.auto_still_since = now
             return
-        if now - self.auto_still_since < 0.7 or self.screen_busy or self.screen_ref is not None or not self.health:
+        if self.screen_busy or self.screen_ref is not None or not self.health:
             return
-        if self.auto_done is not None and changed_pixels(self.auto_done, m) <= 0.03 * m.size:
+        if self.auto_done is not None:
+            changed = changed_pixels(self.auto_done, m)
+            if changed <= 0.03 * m.size:
+                return
+            if changed > 0.25 * m.size:
+                self.auto_empties = 0  # quite a different screen
+        wts = {r.kind: self.watchers[r.id] for r in self.profile.regions}
+        still = now - max(self.auto_still_since, self.region_active)
+        if still < auto_pause({k for k, w in wts.items() if w.settled}, self.auto_empties) or any(w.reading for w in wts.values()):
             return
         self.start_screen(frame, m, auto=True)
 
@@ -681,7 +712,7 @@ class Controller(QObject):
     def job_screen(self, frame: np.ndarray, gen: int, skip: list, auto: bool):
         p = self.profile
         try:
-            ocr = self.api.ocr_lines(frame, p.src_lang)
+            ocr = self.api.ocr_lines(frame, p.src_lang, frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if not lines:
@@ -704,9 +735,12 @@ class Controller(QObject):
         if gen != self.screen_gen or self.screen_ref is None:
             return
         if isinstance(items, dict):
-            self.toast(friendly_error(items["error"]), 4)
+            self.show_error(items["error"])
             self.screen_ref = None
+            self.auto_done = None  # not handled after all: auto mode tries again in a while
+            self.auto_still_since = time.monotonic() + 2
             return
+        self.auto_empties = 0 if items else self.auto_empties + 1
         if items is None:  # auto mode found nothing to translate: stay quiet
             self.screen_ref = None
             return
@@ -744,7 +778,7 @@ class Controller(QObject):
         self.overlay.hide()
         self.panel.hide()
         p = self.profile
-        find = (lambda f: self.api.ocr_lines(f, p.src_lang)["lines"]) if self.health else None
+        find = (lambda f: self.api.ocr_lines(f, p.src_lang, frame_h=f.shape[0])["lines"]) if self.health else None
         self.editor = RegionEditor(frame, p.regions, self.overlay.geometry(), find)
         self.editor.setStyleSheet(QSS)
 
@@ -753,6 +787,7 @@ class Controller(QObject):
                 self.profile.regions = regions
                 self.profile.save()
                 self.shown.clear()
+                self.shown_seq.clear()
                 self.reset_watchers()
                 if regions:
                     self.toast(f"บันทึก {len(regions)} กรอบแล้ว — เริ่มแปล", 3)

@@ -3,12 +3,14 @@ Kept free of app state so tools/render_screen.py can show exactly what the overl
 from __future__ import annotations
 
 import re
+from collections import deque
 
 import cv2
 import numpy as np
 
 from .overlay import Item, text_rect_for, to_qimage
-from .render import SIZE_FACTOR, Line, analyze_line, erase_lines, luminance, outline_for, over_scene
+from .render import SIZE_FACTOR, Line, analyze_line, erase_lines, learn_strokes, luminance, outline_for, over_scene
+from .watcher import plain_text, similar
 
 # characters of the source script: a line without any is a number, a resolution, "OFF", "TAA"... and stays as it is
 SCRIPT = {
@@ -136,39 +138,112 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
     return items
 
 
-def region_item(crop: np.ndarray, px: tuple[int, int, int, int], boxes: list[list[int]], text: str, kind: str,
-                align: str, font_scale: float, strokes: np.ndarray | None = None, ink: str = "any") -> Item | None:
+# glyph height / height of the detector's box around a line (a name box is enlarged before it is read, which
+# gives its box relatively more margin)
+DET_TO_GLYPH = {"name": 0.62, "dialog": 0.9, "subtitle": 0.9}
+
+
+class TextSize:
+    """A game sets all its dialogue in one size. Single measurements jump about over a busy scene, so a region's
+    size is the median of the last ones; until there are a few, implausible ones are held down. Whether the region
+    lies over the game scene is remembered as well: a scene can be one dark colour for a moment."""
+
+    def __init__(self):
+        self.seen: deque = deque(maxlen=25)
+        self.over_scene: deque = deque(maxlen=12)
+
+    def settle(self, height: float, most: float, sure: bool = True) -> float:
+        """sure: the line was long enough to be measured well (over a busy scene short ones come out too tall)."""
+        if not sure:
+            return sorted([*self.seen, min(height, most)])[len(self.seen) // 2]
+        self.seen.append(min(height, most))
+        return sorted(self.seen)[(len(self.seen) - 1) // 2]
+
+
+def remember(context, src: str, tl: str):
+    """Add a line to the context for the next translations. A line that went on replaces its own beginning."""
+    if context and (src.startswith(context[-1]["src"][: max(3, len(context[-1]["src"]) - 3)]) or similar(context[-1]["src"], src) >= 0.6):
+        context.pop()
+    context.append({"src": src, "tl": tl})
+
+
+def rows_of(boxes: list[list[int]]) -> list[float]:
+    """Middle (y) of each row of text; pieces side by side are one row."""
+    rows: list[list[float]] = []
+    for _, y, _, h in sorted(boxes, key=lambda b: b[1] + b[3] / 2):
+        c = y + h / 2
+        if rows and abs(c - sum(rows[-1]) / len(rows[-1])) < 0.5 * h:
+            rows[-1].append(c)
+        else:
+            rows.append([c])
+    return [sum(r) / len(r) for r in rows]
+
+
+def region_item(crop: np.ndarray, px: tuple[int, int, int, int], lines: list[dict], text: str, kind: str, align: str,
+                font_scale: float, strokes: np.ndarray | None = None, ink: str = "any",
+                sizes: TextSize | None = None) -> Item | None:
     """Overlay item for one watched region (a dialogue box, a speaker name): crop is the region's picture, px its
-    place in the game's client area, boxes the OCR line boxes inside the crop, text the translation, strokes the
+    place in the game's client area, lines the OCR lines inside the crop, text the translation, strokes the
     watcher's map of strokes that have been standing still (any size; it is scaled to the crop)."""
-    if not text:
+    if not text or not lines:
         return None
     if strokes is not None and strokes.shape != crop.shape[:2]:
         strokes = cv2.resize(strokes.astype(np.uint8), (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
     scene = over_scene(crop)
+    if sizes is not None:
+        sizes.over_scene.append(scene)
+        scene = any(sizes.over_scene)
+    boxes = [l["dbox"] if scene and l.get("dbox") else l["bbox"] for l in lines]
     looks = [a for b in boxes if (a := analyze_line(crop, b, strokes, ink, scene)) is not None]
-    patch = erase_lines(crop, looks)
-    fg = looks[0].fg if looks else "#ffffff"
-    # the lines of one region are set in one size; a line whose strokes were partly lost measures too small
-    height = max((a.glyph_h for a in looks), default=0) or max(b[3] for b in boxes)
-    if scene:  # strokes lost against a bright scene shorten the measurement: not below most of the line's box
-        tight = sorted(b[3] for b in boxes)[0]
-        height = max(height, 0.6 * min(tight, 0.6 * px[3] if kind == "name" else 0.3 * px[3]))
-    size = min(height * SIZE_FACTOR, 0.8 * px[3])  # never taller than the region
-    plain = all(a.plain for a in looks)
     if not looks:
-        outline = ""
-    elif plain:
-        outline = outline_for(fg, looks[0].bg, True)
-    else:  # over the scene: what is behind the text keeps changing, so the outline follows the text alone
+        return None
+    patch = erase_lines(crop, looks)
+    fg = looks[0].fg
+    found = [(l.get("dbox") or l["bbox"])[3] for l in lines if len(l["text"]) >= 2] or [(lines[0].get("dbox") or lines[0]["bbox"])[3]]
+    if scene or (sizes is not None and all(l.get("dbox") for l in lines)):
+        # the lowest of the boxes: ruby above a line, or a detail of the scene, makes a box taller
+        height = DET_TO_GLYPH.get(kind, 0.8) * min(found)
+    else:
+        height = max(a.glyph_h for a in looks)
+    if sizes is not None:
+        height = sizes.settle(height, *((0.65 * px[3],) if kind == "name" else (0.3 * px[3], max(len(l["text"]) for l in lines) >= 8)))
+    size = max(12.0, min(height * SIZE_FACTOR, 0.8 * px[3]) * font_scale)  # never taller than the region
+    if scene:  # what is behind the text keeps changing, so the outline follows the text alone
         outline = "#101010" if luminance(fg) > 128 else "#f4f4f4"
-    item = Item(rect=text_rect_for(px, boxes, kind, align), text=text, fg=fg, outline=outline,
-                max_px=max(12.0, size * font_scale), vcenter=kind != "dialog", align=align, bold=kind == "name",
+    else:
+        outline = outline_for(fg, looks[0].bg, all(a.plain for a in looks))
+    rows = rows_of(boxes if scene else [[a.box[0], a.glyph_y[0], a.box[2], a.glyph_h] for a in looks])
+    item = Item(rect=text_rect_for(px, boxes, kind, align, size), text=text, fg=fg, outline=outline, max_px=size,
+                vcenter=kind != "dialog", align=align, bold=kind == "name", rows=[px[1] + r for r in rows],
                 patch=to_qimage(patch) if patch is not None else None, patch_pos=(px[0], px[1]))
     item._scale = font_scale
     item._lines = looks  # kept so the patch can be made again from a later frame
-    item._live = not plain
+    item._live = True
+    item._seen = crop if not scene else None
     return item
+
+
+def ocr_region(api, crop: np.ndarray, kind: str, align: str, profile, frame_h: int = 0) -> dict | None:
+    """Read a region: {"text", "lines"}, or None when there is nothing in the game's language (a name already in
+    Latin letters, like the player's own, stays as it is). Worker thread; the replay tool uses it too."""
+    ocr = api.ocr_lines(crop, profile.src_lang, kind, profile.series, profile.target, align, frame_h)
+    lines = [l for l in ocr["lines"] if l["text"].strip()]
+    text = ocr["text"].strip()
+    if not lines or not has_source_text(text, profile.src_lang):
+        return None
+    return {"text": text, "lines": lines, "ms": ocr.get("ms", 0)}
+
+
+def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], reading: dict, kind: str, align: str, ink: str,
+                     profile, context: list[dict], strokes, sizes: TextSize, allow_cloud: bool) -> dict:
+    """Translate a complete reading and lay the translation out. Worker thread; the replay tool uses it too."""
+    res = api.translate_lines([{"id": "a", "src": reading["text"], "kind": kind}], series=profile.series,
+                              target=profile.target, src_lang=profile.src_lang, engine=profile.engine,
+                              allow_cloud=allow_cloud, context=context if kind != "name" else [])
+    tl = res["lines"].get("a", "")
+    item = region_item(crop, px, reading["lines"], tl, kind, align, profile.font_scale, strokes, ink, sizes)
+    return {"src": reading["text"], "tl": tl, "items": [item] if item else [], "engine": res.get("engine", ""),
+            "kind": kind, "cached": bool(res.get("cached"))}
 
 
 def refresh_patch(item: Item, crop: np.ndarray):
@@ -177,9 +252,54 @@ def refresh_patch(item: Item, crop: np.ndarray):
     lines = getattr(item, "_lines", None)
     if not lines or item.patch is None or crop.shape[:2] != (item.patch.height(), item.patch.width()):
         return
+    seen = getattr(item, "_seen", None)
+    if seen is not None and seen.shape == crop.shape:  # a dialogue box: nothing to do while it does not change
+        if float(cv2.absdiff(seen[::2, ::2], crop[::2, ::2]).mean()) < 1.0:
+            return
+        item._seen = crop.copy()
+    item._looks = getattr(item, "_looks", 0) + 1
+    if item._looks % 2 == 0:  # ten times a second, for as long as it takes to see all of it
+        for l in lines:
+            learn_strokes(l, crop)
     patch = erase_lines(crop, lines)
     if patch is not None:
         item.patch = to_qimage(patch)
+
+
+def extend_item(item: Item, crop: np.ndarray, lines: list[dict], ink: str, strokes: np.ndarray | None = None):
+    """The same text was read again: cover what its rows have grown by since (dots still being typed, an end that
+    was not seen before)."""
+    have = getattr(item, "_lines", None)
+    if not have or len(have) > 12:
+        return
+    if strokes is not None and strokes.shape != crop.shape[:2]:
+        strokes = cv2.resize(strokes.astype(np.uint8), (crop.shape[1], crop.shape[0]), interpolation=cv2.INTER_NEAREST) > 0
+    for l in lines:
+        x, y, w, h = l.get("dbox") or l["bbox"]
+        row = [k for k in have if abs(y + h / 2 - (k.box[1] + k.box[3] / 2)) < 0.5 * h]
+        if not row:
+            continue
+        left, right = min(k.box[0] for k in row), max(k.box[0] + k.box[2] for k in row)
+        for a, b in ((x, left), (right, x + w)):
+            if b - a > 0.9 * h and (look := analyze_line(crop, [a, y, b - a, h], strokes, ink, item._seen is None)) and look.mask.any():
+                have.append(look)
+
+
+def begins(old: dict, new: dict) -> bool:
+    """Is what `old` read still on screen as whole rows of what `new` read (more rows were typed below, or a letter
+    was misread), so that a translation laid over it covers nothing half? (readings as from ocr_region)"""
+    def rows(reading):
+        out: list[list[dict]] = []
+        for l in sorted(reading["lines"], key=lambda l: l["bbox"][1] + l["bbox"][3] / 2):
+            c, h = l["bbox"][1] + l["bbox"][3] / 2, l["bbox"][3]
+            if out and abs(c - (out[-1][0]["bbox"][1] + out[-1][0]["bbox"][3] / 2)) < 0.5 * h:
+                out[-1].append(l)
+            else:
+                out.append([l])
+        return [plain_text("".join(l["text"] for l in sorted(r, key=lambda l: l["bbox"][0]))) for r in out]
+
+    a, b = rows(old), rows(new)
+    return 0 < len(a) <= len(b) and all(abs(len(x) - len(y)) <= 2 and similar(x, y) >= 0.75 for x, y in zip(a, b))
 
 
 def merge_glossary(base: dict, server: dict) -> dict:

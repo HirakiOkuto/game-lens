@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gamelens import thai, win32  # noqa: E402
-from gamelens.watcher import RegionWatcher, has_text, ink_map, similar, stroke_map  # noqa: E402
+from gamelens.watcher import TextFollower, has_text, ink_map, similar, stroke_map  # noqa: E402
 
 
 TEXT = "The quick brown fox jumps over"
@@ -33,15 +33,38 @@ def scene(chars=0, text=TEXT, seed=None, w=640, h=90):
     return img
 
 
-def run(w, frames, t=0.0, dt=0.05):
-    """Feed frames one tick apart; returns (events with their times, time after the last one)."""
-    out = []
-    for f in frames:
+def follow(w, frames, t=0.0, dt=0.05, ocr=0.1, shown_of=None):
+    """Play frames [(picture, text an OCR would read)]; OCR takes `ocr` seconds. Returns (log, time)."""
+    log, due = [], getattr(w, "_due", None)  # a reading may be under way from the frames before
+    for pic, text in frames:
         t += dt
-        ev = w.feed(stroke_map(f), t)
+        ev = w.feed(stroke_map(pic), t)
         if ev:
-            out.append((ev, round(t, 2)))
-    return out, t
+            log.append((ev, round(t, 2)))
+        if ev == "read":
+            due = (t + ocr, text)
+        if due and t >= due[0]:
+            text_read, due = due[1], None
+            what = w.on_read(text_read, t)
+            if what:
+                log.append((what, text_read))
+    w._due = due
+    return log, t
+
+
+def typed(text, start=2, step=2, **kw):
+    return [(scene(n, text, **{k: (v + n if k == "seed" else v) for k, v in kw.items()}), text[:n]) for n in range(start, len(text) + 1, step)]
+
+
+def still(text, n, **kw):
+    return [(scene(len(text), text, **{k: (v + 1000 + i if k == "seed" else v) for k, v in kw.items()}), text) for i in range(n)]
+
+
+def wants(log):
+    return [x for e, x in log if e == "translate"]
+
+
+LINE = "The quick brown fox jumps ove."  # ends like a sentence
 
 
 def test_stroke_map_keeps_text_and_drops_big_bright_areas():
@@ -55,52 +78,87 @@ def test_stroke_map_keeps_text_and_drops_big_bright_areas():
     assert stroke_map(np.zeros((300, 1920, 3), np.uint8)).shape[1] == 480
 
 
-def test_watcher_typewriter_then_stable_then_next_line():
-    w = RegionWatcher(stable_ms=250)
-    ev, t = run(w, [scene(0)] * 8)
-    assert ev == [("changed", 0.05)]  # the very first frame; an empty region is never "stable"
-    typing = [scene(n) for n in range(2, len(TEXT) + 1, 2)]  # two more characters every tick
-    ev, t = run(w, typing + [scene(len(TEXT))] * 12, t)
-    assert [e for e, _ in ev] == ["stable"]  # once, after the line is complete and has been still
-    done = t - 12 * 0.05
-    assert done + 0.25 <= ev[0][1] <= done + 0.25 + 0.3
-    ev, t = run(w, [scene(len(TEXT))] * 20, t)
-    assert ev == []  # the same text stays: nothing to do
-    ev, t = run(w, [scene(len(TEXT), "A completely different line!!")] * 12, t)
-    assert [e for e, _ in ev] == ["changed", "stable"]  # replaced: hide the old translation, read the new line
-    ev, t = run(w, [scene(0)] * 10, t)
-    assert [e for e, _ in ev] == ["changed"]  # the text went away
+def test_follower_translates_as_soon_as_the_sentence_is_complete():
+    w = TextFollower()
+    log, t = follow(w, [(scene(0), "")] * 8)
+    assert log == []  # an empty region is never read
+    log, t = follow(w, typed(LINE), t)
+    assert wants(log) == []  # half a line is not translated, however often it is read
+    done = t
+    log, t = follow(w, still(LINE, 16), t)
+    assert wants(log) == [LINE] and w.settled
+    first = next(i for i, (e, _) in enumerate(log) if e == "translate")
+    assert log[first - 1][0] == "read" and log[first - 1][1] - done <= 0.5  # within half a second of the last letter
+    log, t = follow(w, still(LINE, 40), t)
+    assert [e for e, _ in log] == ["read"] * len(log) and len(log) <= 4  # it stays: a few checks, nothing else
+    other = "A completely different line!!"
+    log, t = follow(w, still(other, 16), t)
+    assert wants(log) == [other]  # replaced: noticed by its strokes or by reading it again at once
+    log, t = follow(w, [(scene(0), "")] * 10, t)
+    assert "hide" in [e for e, _ in log] and not w.settled
 
 
-def test_watcher_reads_text_over_a_moving_scene():
-    """The scene behind the text is different in every frame; the text is what stands still."""
-    w = RegionWatcher(stable_ms=250, max_wait_ms=4000)
-    ev, t = run(w, [scene(0, seed=i) for i in range(10)])
-    typing = [scene(n, seed=100 + n) for n in range(2, len(TEXT) + 1, 2)]
-    ev, t = run(w, typing + [scene(len(TEXT), seed=200 + i) for i in range(14)], t)
-    assert [e for e, _ in ev] == ["stable"]
-    assert ev[0][1] < t - 0.1  # because the text settled, not because max_wait ran out
-    ev, t = run(w, [scene(len(TEXT), seed=300 + i) for i in range(30)], t)
-    assert ev == []  # the moving background alone changes nothing
-    ev, t = run(w, [scene(len(TEXT), "Another line arrives here.", seed=400 + i) for i in range(14)], t)
-    assert [e for e, _ in ev] == ["changed", "stable"]
+def test_follower_without_sentence_end_wants_two_equal_readings():
+    w = TextFollower()
+    line = "The quick brown fox jumps over"
+    log, t = follow(w, typed(line) + still(line, 24))
+    assert wants(log) == [line] and [e for e, _ in log].count("read") >= 2
+    careful = TextFollower(confirm=True)  # engines paid by the character: two equal readings in any case
+    log, _ = follow(careful, still(LINE, 4) + still(LINE, 20))
+    reads_before = [e for e, _ in log[: [e for e, _ in log].index("translate")]].count("read")
+    assert wants(log) == [LINE] and reads_before >= 2
 
 
-def test_watcher_learns_that_the_game_pauses_mid_line():
-    w = RegionWatcher(stable_ms=250)
-    run(w, [scene(0)] * 6)
-    half = [scene(n) for n in range(2, 14, 2)] + [scene(12)] * 10  # typed half, then a pause longer than 250 ms
-    ev, t = run(w, half, 0.3)
-    assert [e for e, _ in ev] == ["stable"]  # read too early...
-    ev, t = run(w, [scene(n) for n in range(14, len(TEXT) + 1, 2)] + [scene(len(TEXT))] * 14, t)
-    assert [e for e, _ in ev] == ["changed", "stable"] and w.stable_s > 0.25  # ...so it waits longer from now on
+def test_follower_line_that_goes_on_after_a_pause():
+    """The game stops typing at "Oh no!" for a moment, then goes on: the first reading is dropped in time."""
+    w = TextFollower()
+    whole = "Oh no! The quick brown fox runs."
+    half = [(scene(6, whole), whole[:6])] * 14
+    log, t = follow(w, half)
+    assert wants(log) == ["Oh no!"]
+    seq = w.seq
+    log, t = follow(w, typed(whole, 8) + still(whole, 16), t)
+    assert w.seq > seq  # what was on its way for "Oh no!" is out of date
+    assert wants(log) == [whole]
 
 
-def test_watcher_reads_a_line_that_never_settles():
-    w = RegionWatcher(stable_ms=250, max_wait_ms=600)
-    frames = [scene(8 + (i % 2) * 14) for i in range(40)]  # the amount of text flips every tick
-    ev, _ = run(w, frames)
-    assert "stable" in [e for e, _ in ev]
+def test_follower_over_a_moving_scene():
+    w = TextFollower()
+    log, t = follow(w, [(scene(0, seed=i), "") for i in range(10)])
+    assert wants(log) == []
+    log, t = follow(w, typed(LINE, seed=100) + still(LINE, 20, seed=200), t)
+    assert wants(log) == [LINE]
+    log, t = follow(w, still(LINE, 30, seed=5000), t)
+    assert {e for e, _ in log} <= {"read"}  # the scene alone changes nothing (a check or two)
+    other = "Another line arrives here now."
+    log, t = follow(w, still(other, 20, seed=9000), t)
+    assert wants(log) == [other]
+
+
+def test_follower_reads_short_lines():
+    w = TextFollower()
+    log, _ = follow(w, [(scene(0), "")] * 5 + [(scene(3, "Un."), "Un.")] * 14)
+    assert wants(log) == ["Un."]
+
+
+def test_follower_reads_ever_less_often_what_it_cannot_read():
+    w = TextFollower()
+    frames = [(scene(6 + (i // 6) % 9 * 2), "") for i in range(400)]  # strokes that change but are never text
+    log, t = follow(w, frames)
+    reads = [x for e, x in log if e == "read"]
+    assert wants(log) == [] and len(reads) < 0.06 * len(frames)  # 20 s: not more than about one a second
+    same = TextFollower()
+    log, _ = follow(same, [(scene(12), "")] * 300)  # strokes that stand still and cannot be read
+    assert [e for e, _ in log].count("read") <= 3
+
+
+def test_follower_again_after_an_error():
+    w = TextFollower()
+    log, t = follow(w, still(LINE, 14))
+    assert wants(log) == [LINE]
+    w.again()  # the server was not ready
+    log, t = follow(w, still(LINE, 14), t)
+    assert wants(log) == [LINE]
 
 
 def test_similarity():
@@ -238,6 +296,11 @@ def test_api_client_sends_token_and_image(tmp_path):
     c = LensClient("http://lens", tok, transport=httpx.MockTransport(handler))
     c.ocr_lines(np.zeros((10, 10, 3), np.uint8))
     assert seen["/ocr/lines"].headers["x-lens-token"] == "secret" and b"image/png" in seen["/ocr/lines"].content
+    # a 720p window's text is enlarged before it is read, and the boxes come back in the picture's own pixels
+    boxed = LensClient("http://lens", tok, transport=httpx.MockTransport(
+        lambda req: httpx.Response(200, json={"lines": [{"bbox": [30, 15, 300, 30], "dbox": [27, 12, 306, 36], "text": "x"}], "text": "x"})))
+    got = boxed.ocr_lines(np.zeros((71, 870, 3), np.uint8), frame_h=720)["lines"][0]
+    assert got["bbox"] == [20, 10, 200, 20] and got["dbox"] == [18, 8, 204, 24]
     r = c.translate_lines([{"id": "a", "src": "あ", "kind": "dialog"}], series="s", target="th", src_lang="ja",
                           engine="hymt", allow_cloud=False, context=[])
     assert r["lines"]["a"] == "ก" and json.loads(seen["/translate/lines"].content)["series"] == "s"
@@ -357,7 +420,7 @@ def test_region_item_for_a_dialogue_box():
     crop = np.full((160, 900, 3), (55, 45, 27), np.uint8)  # a dark dialogue box with two lines of light text
     cv2.putText(crop, "first line of text", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (245, 245, 245), 2, cv2.LINE_AA)
     cv2.putText(crop, "second line", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (245, 245, 245), 2, cv2.LINE_AA)
-    boxes = [[28, 26, 290, 32], [28, 71, 190, 32]]
+    boxes = [{"bbox": [28, 26, 290, 32], "dbox": [24, 20, 298, 44], "text": "一行目です"}, {"bbox": [28, 71, 190, 32], "dbox": [24, 65, 198, 44], "text": "二行目"}]
     it = region_item(crop, (150, 520, 900, 160), boxes, "บรรทัดแรกของข้อความ บรรทัดที่สอง", "dialog", "left", 0.9)
     assert it.rect[0] == 178 and it.rect[1] == 546 and it.rect[2] > 800  # from the first line, across the box
     assert int(it.fg[1:3], 16) > 200 and int(it.outline[1:3], 16) < 90  # light text, outline in the box colour
@@ -413,7 +476,7 @@ def test_region_item_light_text_over_a_bright_scene():
     crop[:, :170] = (170, 190, 220)
     cv2.circle(crop, (250, 20), 22, (200, 200, 205), -1)
     cv2.putText(crop, "Name", (150, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (250, 250, 250), 2, cv2.LINE_AA)
-    it = region_item(crop, (768, 826, 384, 50), [[0, 0, 384, 50]], "Symphoria", "name", "center", 0.9, None, "light")
+    it = region_item(crop, (768, 826, 384, 50), [{"bbox": [0, 0, 384, 50], "dbox": [0, 0, 384, 50], "text": "シンフォーリア"}], "Symphoria", "name", "center", 0.9, None, "light")
     assert luminance(it.fg) > 170 and it.outline == "#101010"  # stays light text with a dark outline
     if it.patch is not None:  # the cover is the glyphs, not a slab over the whole box
         covered = sum(it.patch.pixelColor(x, y).alpha() > 128 for x in range(0, 384, 4) for y in range(0, 50, 4))
@@ -430,3 +493,199 @@ def test_heading_whose_box_pokes_out_of_its_bar_stays_plain():
     a = analyze_line(img, [32, 38, 150, 31])
     assert a.plain and luminance(a.bg) < 90 and luminance(a.fg) > 160
     assert a.glyph_h <= 18 and 40 <= a.box[0] <= 48  # the glyphs, not the bar's edges
+
+
+def test_follower_notices_a_line_that_went_on_unseen():
+    """Over a bright scene the strokes of what is added may not show: a later check reads the longer line."""
+    w = TextFollower()
+    log, t = follow(w, still("Really, is that so?", 12))
+    assert wants(log) == ["Really, is that so?"]
+    longer = [(scene(19, "Really, is that so?"), "Really, is that so? I am sorry.")] * 20  # the same strokes
+    log, t = follow(w, longer, t)
+    assert wants(log) == ["Really, is that so? I am sorry."] and w.settled
+    log, t = follow(w, [(scene(19, "Really, is that so?"), "Really, is tha")] * 30, t)  # read only in part: ignored
+    assert {e for e, _ in log} <= {"read"}
+
+
+def test_follower_does_not_trust_an_ellipsis():
+    w = TextFollower()
+    whole = "Well... the fox is tired now."
+    log, t = follow(w, [(scene(7, whole), whole[:7])] * 4)
+    assert wants(log) == []  # "Well..." may go on: wait for a second equal reading
+
+
+def test_text_size_settles_and_context_replaces_a_lines_beginning():
+    from gamelens.screen import TextSize, remember
+
+    z = TextSize()
+    assert z.settle(90, 32) == 32  # an implausible first measurement is held down
+    for h in (23, 24, 22, 23, 60, 24):
+        last = z.settle(h, 32)
+    assert 22 <= last <= 25
+    ctx = []
+    remember(ctx, "おはよう。", "อรุณสวัสดิ์")
+    remember(ctx, "なにがあったのか", "เกิดอะไร")
+    remember(ctx, "なにがあったのかはわかりません。", "ไม่รู้ว่าเกิดอะไรขึ้น")
+    assert [c["src"] for c in ctx] == ["おはよう。", "なにがあったのかはわかりません。"]
+
+
+def test_same_text_and_goes_on():
+    from gamelens.watcher import goes_on, same_text
+
+    assert same_text("体につくとなかなか取れないのが厄介なところだが……", "体につくとなかなか取れないのが厄介なところだが…")  # dots are not counted
+    assert not same_text("この建物……すごく", "この建物……すごく高い") and not same_text("うん", "うんう")
+    assert goes_on("そんなことがあったんですね……", "そんなことがあったんですね……ミイティ、ごめんなさい。")
+    assert not goes_on("そんなことがあったんですね……", "ミイティ、だれにだって怖いものはあります。")
+
+
+def test_follower_does_not_hide_a_line_whose_strokes_fade_for_a_moment():
+    """The scene behind the text turns bright: half the strokes are lost, the text is the same."""
+    w = TextFollower()
+    log, t = follow(w, still(LINE, 14))
+    assert wants(log) == [LINE]
+    faded = scene(len(LINE), LINE)
+    faded[:, 330:] = (235, 235, 235)
+    log, t = follow(w, [(faded, LINE)] * 20 + still(LINE, 20), t)
+    assert {e for e, _ in log} <= {"read"} and w.settled  # read again, never hidden
+
+
+def test_follower_takes_a_line_that_ends_with_dots_once_typing_has_stopped():
+    from gamelens.watcher import same_text
+
+    assert same_text("飛翔の儀はまだだけど• • • •", "飛翔の儀はまだだけど……")
+    w = TextFollower()
+    line = "The quick brown fox jumps...."
+    log, t = follow(w, typed(line, step=3), ocr=0.1)
+    assert wants(log) == []
+    done = t
+    log, t = follow(w, still(line, 24), t)
+    assert wants(log) == [line]
+
+
+def test_follower_notices_what_was_typed_while_it_was_being_read():
+    w = TextFollower()
+    whole = "Oh no! The quick brown fox runs."
+    frames = [(scene(6, whole), whole[:6])] * 8 + typed(whole, 7, step=2) + still(whole, 16)
+    log, _ = follow(w, frames, ocr=0.25)
+    assert wants(log)[-1] == whole
+
+
+def test_suggested_dialogue_region_has_room_for_three_rows():
+    from gamelens.region_editor import cluster_lines, suggest_region
+
+    # 1080p, rows 40 px apart (the game's own measure): one row on screen when the region is set
+    blocks = cluster_lines([{"bbox": [730, 903, 462, 23], "text": "な、なによ。アタシはもう子どもじゃないわ！"}])
+    kind, rect, align = suggest_region(blocks[0], 1920, 1080, blocks)
+    assert (kind, align) == ("dialog", "center")
+    assert rect[1] * 1080 <= 903 and (rect[1] + rect[3]) * 1080 >= 903 + 2 * 40 + 26
+
+
+def test_follower_trusts_reading_once_strokes_have_failed_a_line():
+    """Over a busy, bright scene the strokes come and go although the line stands: it must not blink."""
+    w = TextFollower()
+    line = "Oh no."
+    gone = scene(0)
+    log, t = follow(w, still(line, 14))
+    assert wants(log) == [line] and not w.unsure
+    flicker = ([(gone, line)] * 4 + still(line, 8)) * 8  # the OCR still reads it all the time
+    log, t = follow(w, flicker, t)
+    assert [e for e, _ in log].count("hide") == 1 and w.unsure and w.settled
+    log, t = follow(w, [(gone, "")] * 30, t)  # now it is really gone
+    assert "hide" in [e for e, _ in log] and not w.settled
+
+
+def test_follower_reads_anew_a_line_that_was_misread():
+    from gamelens.watcher import skeleton
+
+    assert skeleton("ますは、ミイティ") == skeleton("まずは、ミィティ") and skeleton("おしい") != skeleton("おい")
+    w = TextFollower()
+    log, t = follow(w, still(LINE, 10))
+    line, seq = w.line, w.seq
+    better = LINE.replace("quick", "brisk")
+    log, t = follow(w, [(p, better) for p, _ in still(LINE, 60)], t)
+    assert wants(log) == [better] and w.corrected and w.line == line and w.seq > seq
+    assert "hide" not in [e for e, _ in log]
+
+
+def test_follower_counts_lines_apart_from_texts():
+    w = TextFollower()
+    whole = "Oh no! The quick brown fox runs."
+    log, t = follow(w, [(scene(6, whole), whole[:6])] * 14)
+    line, seq = w.line, w.seq
+    log, t = follow(w, typed(whole, 8) + still(whole, 16), t)
+    assert w.line == line and w.seq > seq  # it went on: the translation of "Oh no!" may still be shown
+    log, t = follow(w, still("A completely different line!!", 16), t)
+    assert w.line > line
+
+
+def test_begins_wants_whole_rows():
+    from gamelens.screen import begins
+
+    row = lambda y, t: {"bbox": [100, y, 20 * len(t), 24], "text": t}
+    first = {"lines": [row(10, "そうだな。")]}
+    assert begins(first, {"lines": [row(11, "そうだな。"), row(50, "皆を集めてくれ。")]})
+    assert not begins(first, {"lines": [row(11, "そうだな。皆を集めてくれ。")]})  # typed on in the same row
+    assert begins(first, {"lines": [row(10, "そうだね。")]}) and not begins(first, {"lines": [row(10, "ちがう！")]})
+
+
+def test_regions_remember_that_they_lie_over_the_scene():
+    from gamelens.screen import TextSize, region_item, refresh_patch
+
+    rng = np.random.default_rng(1)
+    busy = cv2.resize(rng.integers(0, 255, (12, 60, 3), np.uint8), (640, 100), interpolation=cv2.INTER_CUBIC)
+    dark = np.full((100, 640, 3), (30, 60, 20), np.uint8)
+    line = [{"bbox": [190, 25, 260, 30], "dbox": [188, 22, 264, 36], "text": "ああああああ"}]
+    z = TextSize()
+    for pic in (busy, dark):
+        cv2.putText(pic, "Oh no, no!", (200, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+    on_box = region_item(dark, (0, 0, 640, 100), line, "ไม่นะ", "dialog", "center", 1.0, None, "light", TextSize())
+    item = region_item(busy, (0, 0, 640, 100), line, "ไม่นะ", "dialog", "center", 1.0, None, "light", z)
+    item = region_item(dark, (0, 0, 640, 100), line, "ไม่นะ", "dialog", "center", 1.0, None, "light", z)
+    assert item.outline == "#101010" and item._seen is None and abs(item.max_px - on_box.max_px) < 1
+    before = item.patch
+    refresh_patch(item, busy)  # the camera cuts to something else: what covers the text follows
+    assert item.patch is not before
+    same = on_box.patch
+    refresh_patch(on_box, dark)
+    assert on_box.patch is same  # a dialogue box that does not change costs nothing
+    refresh_patch(on_box, busy)
+    assert on_box.patch is not same
+
+
+def test_strokes_that_were_missed_are_learned_and_rows_extended():
+    """The first look missed part of the line; it is covered once it has stood still for a few looks."""
+    from gamelens.render import analyze_line, learn_strokes
+    from gamelens.screen import TextSize, extend_item, region_item
+
+    def pic(seed, text="Oh no, no!"):
+        rng = np.random.default_rng(seed)
+        im = cv2.resize(rng.integers(0, 150, (6, 30, 3), np.uint8), (640, 100), interpolation=cv2.INTER_CUBIC)
+        cv2.putText(im, text, (200, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2, cv2.LINE_AA)
+        return im
+
+    first = pic(0)
+    line = analyze_line(first, [195, 33, 165, 34], None, "light", True)
+    whole = line.mask.copy()
+    line.mask[:, 80:] = 0
+    for i in range(1, 8):
+        learn_strokes(line, pic(i))
+    assert (line.mask[whole > 0] > 0).mean() > 0.9  # the scene behind changed at every look, the text did not
+    assert line.mask.mean() < 1.5 * whole.mean() + 10  # and little else was taken for text
+
+    read = [{"bbox": [195, 33, 165, 34], "dbox": [195, 33, 165, 34], "text": "ああああああああ"}]
+    item = region_item(first, (0, 0, 640, 100), read, "ไม่นะ", "dialog", "center", 1.0, None, "light", TextSize())
+    n = len(item._lines)
+    extend_item(item, first, read, "light", None)
+    assert len(item._lines) == n
+    more = [dict(read[0], dbox=[195, 33, 260, 34])]
+    extend_item(item, pic(0, "Oh no, no! Yes"), more, "light", None)
+    assert len(item._lines) == n + 1 and item._lines[-1].box[0] >= 340
+
+
+def test_auto_screen_gives_way_to_dialogue():
+    from gamelens.watcher import auto_pause
+
+    assert auto_pause(set(), 0) < 1  # a menu: at once
+    assert auto_pause({"name", "dialog"}, 0) >= 5  # someone is speaking
+    assert 1 < auto_pause({"dialog"}, 0) < 5
+    assert auto_pause(set(), 1) < auto_pause(set(), 3) <= 8 and auto_pause(set(), 9) <= 8

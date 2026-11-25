@@ -429,6 +429,8 @@ class HyMtEngine:
         for text in texts:
             used = terms_in_text(text, terms)
             tl = echo_guard(self._ask(self._prompt(text, history, used, target, style)), text, history)
+            if not tl and history:  # it repeated an earlier line: ask again without them
+                tl = self._ask(self._prompt(text, [], used, target, style))
             if tl and any(b not in tl for _, b in used):
                 # a name came out transliterated: once more with stand-ins (these lose some meaning, so only now)
                 tl = self._with_slots(text, history, used, target, style) or tl
@@ -443,8 +445,12 @@ NOISE_RE = re.compile(r"[A-Za-z]{1,2}[\s?!.•·]*")  # a lone Latin letter or t
 
 def echo_guard(tl: str, text: str, history: list[tuple[str, str]]) -> str:
     """Small translation models sometimes answer a short box by repeating an earlier line from the history."""
-    if tl and any(tl == b and a != text for a, b in history):
-        return ""
+    import difflib
+
+    for a, b in history:
+        # the same translation for nearly the same text (a line read before it was quite complete) is no echo
+        if tl and tl == b and a != text and difflib.SequenceMatcher(None, a, text, autojunk=False).ratio() < 0.6:
+            return ""
     return tl
 
 

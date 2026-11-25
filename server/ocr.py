@@ -6,6 +6,7 @@ PP-OCRv6 covers Chinese and Latin-script languages; PP-OCRv5 adds Korean, Thai, 
 from __future__ import annotations
 
 import os
+import re
 import threading
 
 import cv2
@@ -51,12 +52,19 @@ def _get_rapid(version: str, rec_lang: str):
                 "Global.log_level": "warning",
                 "Global.use_cls": False,  # game text is upright
                 "EngineConfig.onnxruntime.use_cuda": os.environ.get("OCR_CUDA") == "1",  # CPU by default: ~0.2 s a box
+                # 4 threads read as fast as all of them and leave the rest of the CPU to the game
+                "EngineConfig.onnxruntime.intra_op_num_threads": int(os.environ.get("OCR_THREADS", "4")),
+                # read at the picture's own size: RapidOCR's default blows a wide dialogue strip up several times,
+                # which takes three times as long and reads worse
+                "Det.limit_type": "max",
+                "Det.limit_side_len": 2000,
                 "Det.ocr_version": OCRVersion(version),
                 "Det.lang_type": LangDet.CH if v5 else LangDet.EN,
                 "Det.model_type": ModelType.MOBILE if v5 else ModelType.SMALL,
                 "Rec.ocr_version": OCRVersion(version),
                 "Rec.lang_type": LangRec(rec_lang),
-                "Rec.model_type": ModelType.MOBILE if v5 else ModelType.SMALL,
+                # the medium recogniser tells voiced kana apart (しっぽ / しっほ, まず / ます) where small does not
+                "Rec.model_type": ModelType.MOBILE if v5 else ModelType.MEDIUM,
             })
         return _rapid[key]
 
@@ -146,6 +154,22 @@ def _tighten(img: np.ndarray, bbox: list[int]) -> list[int]:
     return [int(x + x0), int(y + y0), int(x1 - x0), int(y1 - y0)]
 
 
+_KATA = r"[ァ-ヺー]"
+_FIXES = [  # look-alikes the recogniser mixes up, decided by their neighbours
+    (re.compile(r"(?<=[ぁ-ゖァ-ヺ])[一—―](?=[ぁ-ゖァ-ヺ、。！？!?～〜…])"), "ー"),
+    (re.compile(rf"(?<={_KATA})べ|べ(?={_KATA})"), "ベ"),
+    (re.compile(rf"(?<={_KATA})ぺ|ぺ(?={_KATA})"), "ペ"),
+    (re.compile(rf"(?<={_KATA})へ(?={_KATA})"), "ヘ"),
+    (re.compile(r"(?<=[ぁ-ゖ])ベ(?=[ぁ-ゖ])"), "べ"),
+]
+
+
+def fix_kana(text: str) -> str:
+    for pat, to in _FIXES:
+        text = pat.sub(to, text)
+    return text
+
+
 def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> list[dict]:
     """Horizontal lines of typeset text (game dialogue boxes, menus): PP-OCR detection + recognition on the
     whole image. Returns [{bbox:[x,y,w,h], text, conf}] in reading order (rows top to bottom, left to right)."""
@@ -163,7 +187,8 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         if H * scale <= 160:  # one short line the detector did not find: read the whole crop as that line
             r = engine(work, use_det=False, use_cls=False, use_rec=True)
             if r is not None and r.txts and r.scores[0] >= max(min_score, 0.6) and r.txts[0].strip():
-                return [{"bbox": [0, 0, W, H], "text": r.txts[0].strip(), "conf": round(float(r.scores[0]), 3)}]
+                return [{"bbox": [0, 0, W, H], "dbox": [0, 0, W, H], "text": r.txts[0].strip(),
+                         "conf": round(float(r.scores[0]), 3)}]
         return []
     lines = []
     for box, txt, score in zip(res.boxes, res.txts, res.scores):
@@ -175,11 +200,67 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
         lines.append({"bbox": [x0, y0, x1 - x0, y1 - y0], "text": txt.strip(), "conf": round(float(score), 3)})
-    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"])) for l in lines])
+    # dbox is the detector's own box: steady in height and position even over a busy scene, where tightening
+    # (bbox, right for text on a panel) is fooled by what lies behind the glyphs
+    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"]), dbox=l["bbox"]) for l in lines])
     if lang in NO_SPACE:
         lines = _drop_ruby(lines)
     lines = _rows(lines)
+    if lang == "ja":
+        for l in lines:
+            l["text"] = fix_kana(l["text"])
     return lines
+
+
+def _levels(gray: np.ndarray, pct: float = 99) -> np.ndarray:
+    """Everything but the brightest pixels pushed to black."""
+    hi = float(np.percentile(gray, pct))
+    return np.clip((gray.astype(np.float32) - (hi - 90)) / 90 * 255, 0, 255).astype(np.uint8)
+
+
+def _centred_rows(lines: list[dict], width: int) -> list[dict]:
+    """The lines of rows that are set around the middle. A row is judged as a whole: a gap inside it (名付けて
+    ベタベタ弾！) makes the detector return pieces of it."""
+    rows: list[list[dict]] = []
+    for l in sorted(lines, key=lambda l: l["dbox"][1] + l["dbox"][3] / 2):
+        c = l["dbox"][1] + l["dbox"][3] / 2
+        if rows and abs(c - (rows[-1][0]["dbox"][1] + rows[-1][0]["dbox"][3] / 2)) < 0.5 * l["dbox"][3]:
+            rows[-1].append(l)
+        else:
+            rows.append([l])
+    out = []
+    for row in rows:
+        x0 = min(l["dbox"][0] for l in row)
+        x1 = max(l["dbox"][0] + l["dbox"][2] for l in row)
+        if abs((x0 + x1) / 2 - width / 2) <= max(0.035 * width, 1.2 * row[0]["dbox"][3]):
+            out += row
+    return [l for l in lines if any(l is o for o in out)]
+
+
+def read_dialog(img: np.ndarray, lang: str, centred: bool, has_text) -> list[dict]:
+    """A dialogue region. centred: the game sets its dialogue around the region's middle, so a line anywhere else
+    is not dialogue (a menu that happens to be under the region) or is not complete yet, and is ignored.
+    Over a bright scene the plain reading loses parts of a line; then the picture is read again with the scene
+    pushed away and the fuller reading wins. has_text(text): is it in the game's script at all."""
+    W = img.shape[1]
+
+    def good(lines):
+        lines = [l for l in lines if l["conf"] >= 0.6]
+        if centred:
+            lines = _centred_rows(lines, W)
+        jp = [l for l in lines if has_text(l["text"])]
+        # marks standing apart ("！" after a gap) belong to a row that has text
+        return [l for l in lines if l in jp or any(abs(l["dbox"][1] - k["dbox"][1]) < 0.5 * k["dbox"][3] for k in jp)]
+
+    plain = read_lines(img, lang)
+    best = good(plain)
+    doubtful = not best or len(best) < len([l for l in plain if has_text(l["text"])]) or min(l["conf"] for l in best) < 0.93
+    if not doubtful:
+        return best
+    score = lambda ls: sum(len(l["text"]) * l["conf"] for l in ls)  # noqa: E731
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    again = good(read_lines(cv2.cvtColor(_levels(gray, 99.3), cv2.COLOR_GRAY2RGB), lang))
+    return again if score(again) > 1.03 * score(best) else best
 
 
 def _name_variants(img: np.ndarray):
@@ -187,9 +268,7 @@ def _name_variants(img: np.ndarray):
     is of the picture as it is). Bright text on a bright scene is where the plain picture fails."""
     big = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(big, cv2.COLOR_RGB2GRAY)
-    hi = float(np.percentile(gray, 99))
-    levels = np.clip((gray.astype(np.float32) - (hi - 90)) / 90 * 255, 0, 255).astype(np.uint8)
-    yield cv2.cvtColor(levels, cv2.COLOR_GRAY2RGB)
+    yield cv2.cvtColor(_levels(gray), cv2.COLOR_GRAY2RGB)
     top = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25)))
     yield cv2.cvtColor(255 - cv2.normalize(top, None, 0, 255, cv2.NORM_MINMAX), cv2.COLOR_GRAY2RGB)
 
@@ -204,7 +283,7 @@ def read_name(img: np.ndarray, lang: str, find, fold) -> list[dict]:
     if (known := find(readings[0][0])):
         return _named(lines, known)
     for pic in _name_variants(img):
-        ls = [dict(l, bbox=[v // 2 for v in l["bbox"]]) for l in read_lines(pic, lang)]
+        ls = [dict(l, bbox=[v // 2 for v in l["bbox"]], dbox=[v // 2 for v in l["dbox"]]) for l in read_lines(pic, lang)]
         text = "".join(l["text"] for l in ls)
         if (known := find(text)):
             return _named(ls, known)
@@ -216,8 +295,6 @@ def read_name(img: np.ndarray, lang: str, find, fold) -> list[dict]:
 
 
 def _named(lines: list[dict], name: str) -> list[dict]:
-    """One line carrying the known name, covering everything that was read."""
-    x0, y0 = min(l["bbox"][0] for l in lines), min(l["bbox"][1] for l in lines)
-    x1 = max(l["bbox"][0] + l["bbox"][2] for l in lines)
-    y1 = max(l["bbox"][1] + l["bbox"][3] for l in lines)
-    return [{"bbox": [x0, y0, x1 - x0, y1 - y0], "text": name, "conf": max(l["conf"] for l in lines)}]
+    """One line carrying the known name, where its longest piece was read (specks read beside it do not count)."""
+    main = max(lines, key=lambda l: len(l["text"]))
+    return [{**main, "text": name, "conf": max(l["conf"] for l in lines)}]

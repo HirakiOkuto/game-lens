@@ -83,7 +83,7 @@ def suggest_region(block: dict, fw: int, fh: int, blocks: list[dict] | None = No
     else:
         kind, pad = "dialog", int(0.5 * lh)
         x1 = max(x + w + pad, min(fw - pad, x + int(0.6 * fw)))
-        rect = [x - pad, y - pad, x1 - (x - pad), max(h, 3 * lh + 2 * int(0.45 * lh)) + 2 * pad]
+        rect = [x - pad, y - pad, x1 - (x - pad), max(h, int(4.6 * lh)) + 2 * pad]  # rows are up to 1.8 letters apart
         if centered:
             half = max(w / 2 + 2 * lh, 0.34 * fw)
             rect = [int(fw / 2 - half), y - pad, int(2 * half), rect[3]]
@@ -116,7 +116,7 @@ def snap_to_box(frame: np.ndarray, block: dict, rect: list[float]) -> list[float
     pad = int(0.25 * lh)
     nx, ny = rect[0] * fw, rect[1] * fh
     nw = max(rect[2] * fw, right - pad - nx)
-    nh = max(rect[3] * fh, bottom - pad - ny) if bottom - y < 8 * lh else rect[3] * fh
+    nh = max(min(rect[3] * fh, 4.9 * lh), bottom - pad - ny) if bottom - y < 8 * lh else rect[3] * fh
     nw = min(nw, fw - nx)
     nh = min(nh, fh - ny)
     return [nx / fw, ny / fh, nw / fw, nh / fh]

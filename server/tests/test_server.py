@@ -417,7 +417,7 @@ def test_read_name_lets_the_glossary_pick_the_right_reading(monkeypatch):
     def readings(*texts):
         it = iter(texts)
         monkeypatch.setattr(ocr, "read_lines", lambda pic, lang: [
-            {"bbox": [100, 10, 80, 20], "text": t, "conf": 0.8}] if (t := next(it)) else [])
+            {"bbox": [100, 10, 80, 20], "dbox": [96, 4, 88, 32], "text": t, "conf": 0.8}] if (t := next(it)) else [])
 
     readings("テララ")  # known at once: read only once
     assert ocr.read_name(img, "ja", find, engines.fold_name)[0]["text"] == "テララ"
@@ -428,3 +428,39 @@ def test_read_name_lets_the_glossary_pick_the_right_reading(monkeypatch):
     assert ocr.read_name(img, "ja", find, engines.fold_name)[0]["text"] == "ミィティの父"
     readings("三行", "美", "")  # nobody knows it and the readings disagree: leave the original on screen
     assert ocr.read_name(img, "ja", find, engines.fold_name) == []
+
+
+def test_fix_kana_lookalikes():
+    from ocr import fix_kana
+
+    assert fix_kana("ほ一ら、こ一いうとき") == "ほーら、こーいうとき" and fix_kana("この一言") == "この一言"
+    assert fix_kana("このべリーの") == "このベリーの" and fix_kana("すベては") == "すべては" and fix_kana("食べる") == "食べる"
+    assert fix_kana("ベタべタする") == "ベタベタする" and fix_kana("一つ") == "一つ" and fix_kana("もう一度") == "もう一度"
+
+
+def test_read_dialog_ignores_text_that_is_not_centred_and_rereads_doubtful_lines(monkeypatch):
+    import ocr
+
+    img = np.zeros((106, 1305, 3), np.uint8)
+    jp = lambda t: any("぀" <= c <= "鿿" for c in t)  # noqa: E731
+    L = lambda x, w, t, c=0.98, y=6: {"bbox": [x, y, w, 30], "dbox": [x, y, w, 36], "text": t, "conf": c}  # noqa: E731
+    calls = []
+
+    def readings(*pages):
+        it = iter(pages)
+        calls.clear()
+        monkeypatch.setattr(ocr, "read_lines", lambda pic, lang: (calls.append(1), next(it))[1])
+
+    two = [L(402, 500, "ああ、これは天道の塔だ。"), L(352, 600, "谷に存在している。", y=46)]
+    readings(two)
+    assert ocr.read_dialog(img, "ja", True, jp) == two and len(calls) == 1  # sure and centred: read once
+    pieces = [L(480, 100, "名付けて"), L(620, 150, "ベタベタ弾"), L(800, 20, "！")]
+    readings(pieces)
+    assert ocr.read_dialog(img, "ja", True, jp) == pieces  # one centred row in three pieces
+    readings([L(900, 160, "購入制限：0")], [L(900, 160, "購入制限：0")])
+    assert ocr.read_dialog(img, "ja", True, jp) == []  # a shop's text under the region is not dialogue
+    readings([L(900, 160, "購入制限：0")])
+    assert ocr.read_dialog(img, "ja", False, jp)  # ...a region with a left-aligned box takes it
+    part, whole = [L(650, 250, "る……これは……？", 0.8)], [L(402, 500, "くっ……体がベタベタする……これは……？", 0.95)]
+    readings(part, whole)
+    assert ocr.read_dialog(img, "ja", True, jp) == whole and len(calls) == 2  # half a line over a bright scene: read again

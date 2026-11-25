@@ -43,12 +43,24 @@ class LensClient:
         except (httpx.HTTPError, ValueError) as e:
             raise LensError(f"ต่อ server ไม่ได้ ({self.base}): {e}") from e
 
-    def ocr_lines(self, bgr: np.ndarray, src_lang: str = "ja", kind: str = "", series: str = "", target: str = "th") -> dict:
+    def ocr_lines(self, bgr: np.ndarray, src_lang: str = "ja", kind: str = "", series: str = "", target: str = "th",
+                  align: str = "left", frame_h: int = 0) -> dict:
+        """frame_h: height of the whole game picture. The text of a small window (720p) is enlarged to the size it
+        has at 1080p before it is read, which reads clearly better; boxes come back in the picture's own pixels."""
+        k = min(1.5, 1080 / frame_h) if 0 < frame_h < 1000 else 1.0
+        if k > 1.0:
+            bgr = cv2.resize(bgr, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
         ok, png = cv2.imencode(".png", bgr, [cv2.IMWRITE_PNG_COMPRESSION, 1])
         if not ok:
             raise LensError("encode image failed")
         files = {"image": ("r.png", png.tobytes(), "image/png")}
-        return self._call("POST", "/ocr/lines", files=files, data={"src_lang": src_lang, "kind": kind, "series": series, "target": target})
+        got = self._call("POST", "/ocr/lines", files=files, data={"src_lang": src_lang, "kind": kind, "series": series, "target": target, "align": align})
+        if k > 1.0:
+            for l in got["lines"]:
+                for b in ("bbox", "dbox"):
+                    if b in l:
+                        l[b] = [round(v / k) for v in l[b]]
+        return got
 
     def translate_lines(self, lines: list[dict], *, series: str, target: str, src_lang: str, engine: str,
                         allow_cloud: bool, context: list[dict]) -> dict:

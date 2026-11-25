@@ -32,6 +32,7 @@ class Item:
     outline: str = ""  # outline colour ('' = one that contrasts with fg)
     bold: bool = False
     vcenter: bool = False  # one line, centred vertically in rect (names, subtitles, UI labels)
+    rows: list[float] | None = None  # middle (y) of each original line: the translation sits on the same lines
     patch: QImage | None = None
     patch_pos: tuple[int, int] = (0, 0)
     born: float = field(default_factory=time.monotonic)
@@ -204,7 +205,11 @@ class Overlay(QWidget):
         fm = QFontMetricsF(font)
         path = QPainterPath()
         top = y + max(0.0, (h - len(lines) * lh) / 2) if it.vcenter or (len(lines) == 1 and it.align == "center") else y
-        if it.vcenter:
+        if it.rows:
+            # as many lines or fewer: around the middle of the original block; more: from its first line down
+            mid = sum(it.rows) / len(it.rows) if len(lines) <= len(it.rows) else it.rows[0] + (len(lines) - 1) * lh / 2
+            top = mid - len(lines) * lh / 2 - 0.1 * font.pixelSize()
+        elif it.vcenter:
             # a line box keeps headroom for marks above the letters, so the letters themselves sit below its
             # middle: lift them to where the original text's middle was
             top -= 0.1 * font.pixelSize()
@@ -219,10 +224,10 @@ class Overlay(QWidget):
 
 
 def text_rect_for(region_px: tuple[int, int, int, int], line_boxes: list[list[int]], kind: str,
-                  align: str = "left") -> tuple[int, int, int, int]:
-    """Where the translation goes. Dialogue fills from the first line's top-left to the region's right/bottom
-    edge (Thai runs longer than Japanese). A name or subtitle starts where the original starts, on the same
-    centre line, with room above and below for Thai vowels and tone marks."""
+                  align: str = "left", size: float = 0) -> tuple[int, int, int, int]:
+    """The room a region's translation may take. Dialogue: from its first line down to the region's end (and at
+    least two lines of `size`, so a short box does not shrink the text), as wide as the region allows. A name or
+    subtitle: one line where the original is, with room above and below for Thai vowels and tone marks."""
     rx, ry, rw, rh = region_px
     if not line_boxes:
         return region_px
@@ -230,13 +235,8 @@ def text_rect_for(region_px: tuple[int, int, int, int], line_boxes: list[list[in
     y0 = min(b[1] for b in line_boxes)
     x1 = max(b[0] + b[2] for b in line_boxes)
     y1 = max(b[1] + b[3] for b in line_boxes)
+    x, w = (rx + 4, rw - 8) if align == "center" else (rx + x0, max(x1 - x0, rw - x0 - 4))
     if kind == "dialog":
-        if align == "center":  # centred lines: the whole width of the region, around its middle
-            return rx + 4, ry + y0, rw - 8, max(y1 - y0, rh - y0 - 4)
-        return rx + x0, ry + y0, max(x1 - x0, rw - x0 - 4), max(y1 - y0, rh - y0 - 4)
-    h = y1 - y0
-    tall = int(1.9 * h)
-    cy = ry + (y0 + y1) // 2
-    if align == "center":
-        return rx + 4, cy - tall // 2, rw - 8, tall
-    return rx + x0, cy - tall // 2, max(x1 - x0, rw - x0 - 4), tall
+        return x, ry + y0, w, int(max(y1 - y0, rh - y0 - 4, 2.8 * size))
+    tall = int(max(1.9 * (y1 - y0), 1.6 * size))
+    return x, ry + (y0 + y1) // 2 - tall // 2, w, tall

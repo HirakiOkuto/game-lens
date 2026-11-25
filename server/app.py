@@ -20,7 +20,7 @@ import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ocr import NO_SPACE, normalize_lang, read_lines, read_name, route
+from ocr import NO_SPACE, normalize_lang, read_dialog, read_lines, read_name, route
 from store import Store
 from translate.engines import (REMOTE, EngineError, extract_glossary, fold_name, get_engine, glossary_terms, match_name,
                                match_term, translate_blocks)
@@ -119,6 +119,7 @@ async def ocr_lines(
     kind: str = Form(""),
     series: str = Form(""),
     target: str = Form("th"),
+    align: str = Form("left"),
 ):
     """A screenshot or a crop of one (a dialogue box): its typeset horizontal lines, in reading order. For
     kind=name (a speaker-name box) the names of the series' glossary help to read it."""
@@ -131,6 +132,8 @@ async def ocr_lines(
             if kind == "name" and series:
                 terms = glossary_terms(store.get_glossary(glossary_key(series, target))[1])
                 lines = read_name(img, src, lambda t: (match_term(t, terms) or (None,))[0], fold_name)
+            elif kind == "dialog":
+                lines = read_dialog(img, src, align == "center", lambda t: not already_in(t, "en", "ja") or src != "ja")
             else:
                 lines = read_lines(img, src, min_score)
         for i, l in enumerate(lines):

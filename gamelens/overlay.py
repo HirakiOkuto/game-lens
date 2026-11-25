@@ -28,7 +28,8 @@ class Item:
     text: str
     fg: str = "#ffffff"
     max_px: float = 28
-    align: str = "left"
+    align: str = "left"  # left / center / right
+    outline: str = ""  # outline colour ('' = one that contrasts with fg)
     bold: bool = False
     vcenter: bool = False  # one line, centred vertically in rect (names, subtitles, UI labels)
     patch: QImage | None = None
@@ -203,17 +204,22 @@ class Overlay(QWidget):
         fm = QFontMetricsF(font)
         path = QPainterPath()
         top = y + max(0.0, (h - len(lines) * lh) / 2) if it.vcenter or (len(lines) == 1 and it.align == "center") else y
+        if it.vcenter:
+            # a line box keeps headroom for marks above the letters, so the letters themselves sit below its
+            # middle: lift them to where the original text's middle was
+            top -= 0.1 * font.pixelSize()
         for i, (s, nw) in enumerate(lines):
-            lx = x + (w - nw) / 2 if it.align == "center" else x
+            lx = x + (w - nw) / 2 if it.align == "center" else (x + w - nw if it.align == "right" else x)
             path.addText(QPointF(lx, top + i * lh + fm.ascent()), font, s)
-        outline = QColor(contrast_outline(it.fg))
-        pen = QPen(outline, max(2.0, font.pixelSize() / 7))
+        outline = QColor(it.outline or contrast_outline(it.fg))
+        pen = QPen(outline, max(1.6, font.pixelSize() / 8))
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         p.strokePath(path, pen)
         p.fillPath(path, QColor(it.fg))
 
 
-def text_rect_for(region_px: tuple[int, int, int, int], line_boxes: list[list[int]], kind: str) -> tuple[int, int, int, int]:
+def text_rect_for(region_px: tuple[int, int, int, int], line_boxes: list[list[int]], kind: str,
+                  align: str = "left") -> tuple[int, int, int, int]:
     """Where the translation goes. Dialogue fills from the first line's top-left to the region's right/bottom
     edge (Thai runs longer than Japanese). A name or subtitle starts where the original starts, on the same
     centre line, with room above and below for Thai vowels and tone marks."""
@@ -225,8 +231,12 @@ def text_rect_for(region_px: tuple[int, int, int, int], line_boxes: list[list[in
     x1 = max(b[0] + b[2] for b in line_boxes)
     y1 = max(b[1] + b[3] for b in line_boxes)
     if kind == "dialog":
+        if align == "center":  # centred lines: the whole width of the region, around its middle
+            return rx + 4, ry + y0, rw - 8, max(y1 - y0, rh - y0 - 4)
         return rx + x0, ry + y0, max(x1 - x0, rw - x0 - 4), max(y1 - y0, rh - y0 - 4)
     h = y1 - y0
     tall = int(1.9 * h)
     cy = ry + (y0 + y1) // 2
+    if align == "center":
+        return rx + 4, cy - tall // 2, rw - 8, tall
     return rx + x0, cy - tall // 2, max(x1 - x0, rw - x0 - 4), tall

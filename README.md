@@ -22,6 +22,7 @@ game-lens เปิดระบบแปลกับโมเดลในเค�
    - ลากที่ว่าง = กรอบใหม่ • ลากกรอบ = ย้าย • ลากมุมขวาล่าง = ปรับขนาด
    - กด 1 / 2 / 3 = บทพูด / ชื่อผู้พูด / ซับ • Delete = ลบ • Enter = บันทึก
    - ถ้าตัวอักษรในเกมสีเข้มบนพื้นสว่าง ให้คลิกขวาที่กรอบแล้วเลือก "สีตัวอักษร: เข้ม"
+   - บทพูดที่ลอยกลางจอทับฉากเกม (ไม่มีกล่อง) ก็ใช้ได้: กรอบจะถูกจัดกึ่งกลางให้เอง และกว้างพอสำหรับบรรทัดยาว
 
 ครบสามขั้นแล้วจะเริ่มแปลเอง ค่าทั้งหมดถูกจำไว้ ครั้งต่อไปแค่เปิดเกม
 
@@ -82,6 +83,15 @@ $env:GAMELENS_PROFILE = "profiles/fake-game.json"; .venv\Scripts\python.exe -m g
 .venv\Scripts\python.exe -m pytest tests -q                                             # client
 .venv\Scripts\python.exe -m pytest server/tests -q                                      # server
 .\start.ps1 -Quit                                                                       # ปิด game-lens
+.venv\Scripts\python.exe tools\render_screen.py shot.png out.png                        # ดูว่า F9 จะวาดอะไรบนภาพหน้าจอ (ต้องเปิด game-lens อยู่)
+```
+
+ทดสอบกับวิดีโอที่อัดจากเกม (ไม่ต้องเปิดเกม): เล่นคลิปผ่านระบบจับบทพูดจริง แล้วรายงานว่าจับได้กี่บรรทัด คำแปลขึ้นช้าแค่ไหน
+พร้อมภาพก่อน/หลังของทุกบรรทัด ใส่ `--save-video` ถ้าอยากได้คลิปที่มีคำแปลทับ
+
+```powershell
+.venv\Scripts\python.exe tools\replay_video.py game.mp4 --start 30:00 --end 32:14 `
+    --region name:center:760,825,400,50 --region dialog:center:560,890,800,95 --out logs\replay\test
 ```
 
 ## โครงสร้าง

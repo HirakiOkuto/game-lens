@@ -20,7 +20,7 @@ import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ocr import NO_SPACE, line_colors, normalize_lang, read_lines, route
+from ocr import NO_SPACE, normalize_lang, read_lines, route
 from store import Store
 from translate.engines import REMOTE, EngineError, extract_glossary, get_engine, translate_blocks
 
@@ -116,7 +116,7 @@ async def ocr_lines(
     src_lang: str = Form("ja"),
     min_score: float = Form(0.5),
 ):
-    """A screenshot or a crop of one (a dialogue box): typeset horizontal lines with their colours."""
+    """A screenshot or a crop of one (a dialogue box): its typeset horizontal lines, in reading order."""
     src = normalize_lang(src_lang)
     img = decode_image(await image.read())
     t0 = time.perf_counter()
@@ -126,7 +126,6 @@ async def ocr_lines(
             lines = read_lines(img, src, min_score)
         for i, l in enumerate(lines):
             l["id"] = f"l{i}"
-            l.update(line_colors(img, l["bbox"]))
         return lines
 
     lines = await run_in_thread(work)

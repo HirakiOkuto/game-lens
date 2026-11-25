@@ -61,21 +61,35 @@ def is_name_block(block: dict, blocks: list[dict]) -> bool:
     return False
 
 
-def suggest_region(block: dict, fw: int, fh: int, blocks: list[dict] | None = None) -> tuple[str, list[float]]:
-    """A region for a clicked text block: a speaker name gets a snug box; dialogue gets a box widened and deepened
-    so longer lines and up to three lines still fall inside it."""
+def is_centered(block: dict, fw: int) -> bool:
+    """Text set around the middle of the screen (subtitle-style dialogue and the speaker's name above it)."""
+    x, _, w, _ = block["bbox"]
+    return abs(x + w / 2 - fw / 2) < 0.03 * fw
+
+
+def suggest_region(block: dict, fw: int, fh: int, blocks: list[dict] | None = None) -> tuple[str, list[float], str]:
+    """(kind, rect, align) for a clicked text block. A speaker name gets a snug box; dialogue gets a box widened
+    and deepened so longer lines and up to three lines still fall inside it. Text centred on the screen gets a
+    region centred there too, wide enough for the longest line."""
     x, y, w, h = block["bbox"]
     lh = block["lh"]
+    centered = is_centered(block, fw)
     if is_name_block(block, blocks or [block]):
         kind, pad = "name", int(0.35 * lh)
         rect = [x - pad, y - pad, w + 2 * pad + int(2 * lh), h + 2 * pad]
+        if centered:
+            half = max(w / 2 + 3 * lh, 0.1 * fw)
+            rect = [int(fw / 2 - half), y - pad, int(2 * half), h + 2 * pad]
     else:
         kind, pad = "dialog", int(0.5 * lh)
         x1 = max(x + w + pad, min(fw - pad, x + int(0.6 * fw)))
         rect = [x - pad, y - pad, x1 - (x - pad), max(h, 3 * lh + 2 * int(0.45 * lh)) + 2 * pad]
+        if centered:
+            half = max(w / 2 + 2 * lh, 0.34 * fw)
+            rect = [int(fw / 2 - half), y - pad, int(2 * half), rect[3]]
     rx, ry = max(0, rect[0]), max(0, rect[1])
     rw, rh = min(fw - rx, rect[2]), min(fh - ry, rect[3])
-    return kind, [rx / fw, ry / fh, rw / fw, rh / fh]
+    return kind, [rx / fw, ry / fh, rw / fw, rh / fh], "center" if centered else "left"
 
 
 def snap_to_box(frame: np.ndarray, block: dict, rect: list[float]) -> list[float]:
@@ -251,10 +265,11 @@ class RegionEditor(QWidget):
             self.mode = "resize" if self._on_handle(r, pos) else "move"
             self.orig = list(r.rect)
         elif (b := self._block_at(pos)) is not None:
-            kind, rect = suggest_region(b, self.fw, self.fh, self.blocks)
-            if kind == "dialog":
+            kind, rect, align = suggest_region(b, self.fw, self.fh, self.blocks)
+            if kind == "dialog" and align == "left":
                 rect = snap_to_box(self.frame, b, rect)
-            self.selected = Region(id=uuid.uuid4().hex[:8], kind=kind, rect=rect)
+            ink = "any" if kind == "subtitle" else "light"
+            self.selected = Region(id=uuid.uuid4().hex[:8], kind=kind, rect=rect, align=align, ink=ink)
             self.regions.append(self.selected)
             self.mode = None
         else:

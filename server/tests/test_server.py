@@ -184,15 +184,6 @@ def test_read_lines_drops_ruby_and_orders_rows():
     assert [l["text"] for l in _rows([second, right, base])] == ["指揮官", "右", "二行目"]
 
 
-def test_line_colors_dark_box_white_text():
-    from ocr import line_colors
-
-    img = np.full((40, 200, 3), (20, 30, 60), np.uint8)
-    cv2.putText(img, "TEXT", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (250, 250, 250), 2)
-    c = line_colors(img, [0, 0, 200, 40])
-    assert c["bg"] == "#141e3c" and int(c["fg"][1:3], 16) > 200
-
-
 def _client(monkeypatch, tmp_path):
     import app as app_mod
     from fastapi.testclient import TestClient
@@ -211,7 +202,7 @@ def test_ocr_lines_endpoint(monkeypatch, tmp_path):
     assert client.post("/ocr/lines", files=files).status_code == 401
     files = {"image": ("r.png", io.BytesIO(png.tobytes()), "image/png")}
     d = client.post("/ocr/lines", files=files, headers=h).json()
-    assert d["text"] == "こんにちは指揮官" and d["lines"][1]["id"] == "l1" and "fg" in d["lines"][0] and d["w"] == 80
+    assert d["text"] == "こんにちは指揮官" and d["lines"][1]["id"] == "l1" and d["w"] == 80
 
 
 def test_translate_lines_cache_glossary_and_skips(monkeypatch, tmp_path):

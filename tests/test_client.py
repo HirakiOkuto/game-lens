@@ -13,60 +13,97 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from gamelens import thai, win32  # noqa: E402
-from gamelens.watcher import RegionWatcher, has_text, ink_map, similar  # noqa: E402
+from gamelens.watcher import RegionWatcher, has_text, ink_map, similar, stroke_map  # noqa: E402
 
 
-def box(text_px=0, w=400, h=100):
-    img = np.full((h, w, 3), (40, 30, 20), np.uint8)
-    if text_px:
-        img[40:60, 20 : 20 + text_px] = 255
+TEXT = "The quick brown fox jumps over"
+
+
+def scene(chars=0, text=TEXT, seed=None, w=640, h=90):
+    """A dialogue region: `chars` characters of white text typed so far. With a seed, the background is a
+    moving scene: big bright shapes that are somewhere else in every frame."""
+    img = np.full((h, w, 3), (60, 45, 30), np.uint8)
+    if seed is not None:
+        rng = np.random.default_rng(seed)
+        for _ in range(6):
+            x, y = int(rng.integers(0, w)), int(rng.integers(0, h))
+            cv2.circle(img, (x, y), int(rng.integers(25, 60)), (170, 160, 150), -1)  # bright, but text stays readable
+    if chars:
+        cv2.putText(img, text[:chars], (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (250, 250, 250), 2, cv2.LINE_AA)
     return img
 
 
-def test_watcher_typewriter_then_stable():
+def run(w, frames, t=0.0, dt=0.05):
+    """Feed frames one tick apart; returns (events with their times, time after the last one)."""
+    out = []
+    for f in frames:
+        t += dt
+        ev = w.feed(stroke_map(f), t)
+        if ev:
+            out.append((ev, round(t, 2)))
+    return out, t
+
+
+def test_stroke_map_keeps_text_and_drops_big_bright_areas():
+    assert not has_text(stroke_map(scene(0)))
+    assert has_text(stroke_map(scene(len(TEXT))))
+    blobs = stroke_map(scene(0, seed=1))
+    assert blobs.mean() < 0.3 * stroke_map(scene(len(TEXT), seed=1)).mean()  # the bright shapes are not strokes
+    dark = np.full((90, 640, 3), 230, np.uint8)
+    cv2.putText(dark, TEXT, (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (40, 40, 40), 2, cv2.LINE_AA)
+    assert has_text(stroke_map(dark, "dark")) and has_text(stroke_map(dark, "any"))  # dark text on a light box
+    assert stroke_map(np.zeros((300, 1920, 3), np.uint8)).shape[1] == 480
+
+
+def test_watcher_typewriter_then_stable_then_next_line():
     w = RegionWatcher(stable_ms=250)
-    t = 0.0
-    assert w.feed(ink_map(box(0)), t) == "changed"  # first frame
-    t += 0.3
-    assert w.feed(ink_map(box(0)), t) == "stable"
-    # a typewriter effect: a few new glyph columns every 50 ms
-    events = []
-    for i in range(1, 8):
-        t += 0.05
-        events.append(w.feed(ink_map(box(i * 30)), t))
-    assert events[0] == "changed" and set(events[1:]) == {None}
-    t += 0.1
-    assert w.feed(ink_map(box(7 * 30)), t) is None  # not yet still for 250 ms
-    t += 0.2
-    assert w.feed(ink_map(box(7 * 30)), t) == "stable"
-    t += 0.5
-    assert w.feed(ink_map(box(7 * 30)), t) is None  # nothing new
+    ev, t = run(w, [scene(0)] * 8)
+    assert ev == [("changed", 0.05)]  # the very first frame; an empty region is never "stable"
+    typing = [scene(n) for n in range(2, len(TEXT) + 1, 2)]  # two more characters every tick
+    ev, t = run(w, typing + [scene(len(TEXT))] * 12, t)
+    assert [e for e, _ in ev] == ["stable"]  # once, after the line is complete and has been still
+    done = t - 12 * 0.05
+    assert done + 0.25 <= ev[0][1] <= done + 0.25 + 0.3
+    ev, t = run(w, [scene(len(TEXT))] * 20, t)
+    assert ev == []  # the same text stays: nothing to do
+    ev, t = run(w, [scene(len(TEXT), "A completely different line!!")] * 12, t)
+    assert [e for e, _ in ev] == ["changed", "stable"]  # replaced: hide the old translation, read the new line
+    ev, t = run(w, [scene(0)] * 10, t)
+    assert [e for e, _ in ev] == ["changed"]  # the text went away
 
 
-def test_watcher_ignores_background_motion_and_forces_after_max_wait():
-    rng = np.random.default_rng(0)
-    w = RegionWatcher(stable_ms=250, max_wait_ms=1000)
-    t = 0.0
-    w.feed(ink_map(box(200)), t)
-    # dark noise behind light text: the light-ink map does not move
-    for _ in range(5):
-        t += 0.05
-        img = box(200)
-        img[70:] = rng.integers(0, 120, img[70:].shape, dtype=np.uint8)
-        w.feed(ink_map(img), t)
-    assert w.dirty_since is None or t - w.dirty_since < 1  # settled, not stuck
-    # constantly changing light pixels: still read after max_wait
-    w2 = RegionWatcher(stable_ms=250, max_wait_ms=600)
-    got, t = [], 0.0
-    for i in range(40):
-        t += 0.05
-        got.append(w2.feed(ink_map(box(20 + (i % 2) * 200)), t))
-    assert "stable" in got
+def test_watcher_reads_text_over_a_moving_scene():
+    """The scene behind the text is different in every frame; the text is what stands still."""
+    w = RegionWatcher(stable_ms=250, max_wait_ms=4000)
+    ev, t = run(w, [scene(0, seed=i) for i in range(10)])
+    typing = [scene(n, seed=100 + n) for n in range(2, len(TEXT) + 1, 2)]
+    ev, t = run(w, typing + [scene(len(TEXT), seed=200 + i) for i in range(14)], t)
+    assert [e for e, _ in ev] == ["stable"]
+    assert ev[0][1] < t - 0.1  # because the text settled, not because max_wait ran out
+    ev, t = run(w, [scene(len(TEXT), seed=300 + i) for i in range(30)], t)
+    assert ev == []  # the moving background alone changes nothing
+    ev, t = run(w, [scene(len(TEXT), "Another line arrives here.", seed=400 + i) for i in range(14)], t)
+    assert [e for e, _ in ev] == ["changed", "stable"]
 
 
-def test_has_text_and_similarity():
-    assert not has_text(ink_map(box(0)))
-    assert has_text(ink_map(box(200)))
+def test_watcher_learns_that_the_game_pauses_mid_line():
+    w = RegionWatcher(stable_ms=250)
+    run(w, [scene(0)] * 6)
+    half = [scene(n) for n in range(2, 14, 2)] + [scene(12)] * 10  # typed half, then a pause longer than 250 ms
+    ev, t = run(w, half, 0.3)
+    assert [e for e, _ in ev] == ["stable"]  # read too early...
+    ev, t = run(w, [scene(n) for n in range(14, len(TEXT) + 1, 2)] + [scene(len(TEXT))] * 14, t)
+    assert [e for e, _ in ev] == ["changed", "stable"] and w.stable_s > 0.25  # ...so it waits longer from now on
+
+
+def test_watcher_reads_a_line_that_never_settles():
+    w = RegionWatcher(stable_ms=250, max_wait_ms=600)
+    frames = [scene(8 + (i % 2) * 14) for i in range(40)]  # the amount of text flips every tick
+    ev, _ = run(w, frames)
+    assert "stable" in [e for e, _ in ev]
+
+
+def test_similarity():
     assert similar("指揮官、おはよう", "指揮官、おはよう") == 1.0
     assert similar("指揮官、おはよう。", "指揮官、おはよう") > 0.92
     assert similar("はい", "いいえ、違います") < 0.5
@@ -93,19 +130,70 @@ def test_overlay_fit_wraps_thai_and_shrinks():
     assert big.pixelSize() >= 25  # a short name keeps (almost) the original size
 
 
-def test_erase_patch_covers_only_glyphs():
-    from gamelens.render import contrast_outline, erase_patch
+def _ui_frame():
+    """A light panel with a dark label on the left, a white pill with a centred value, and a dark bar heading."""
+    img = np.full((200, 600, 3), (225, 215, 205), np.uint8)
+    cv2.putText(img, "Label", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    cv2.rectangle(img, (360, 40), (560, 72), (252, 252, 252), -1)
+    cv2.putText(img, "Val", (444, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    cv2.rectangle(img, (30, 110), (570, 136), (50, 45, 40), -1)
+    cv2.putText(img, "Heading", (34, 129), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+    return img
 
-    img = np.full((80, 300, 3), (60, 40, 30), np.uint8)
-    cv2.putText(img, "TEXT", (20, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
-    tight = erase_patch(img, [[18, 24, 100, 34]])  # a box tight around the glyphs: the cover still grows past it
-    assert tight[20, 60, 3] > 0 or tight[60, 60, 3] > 0
-    p = erase_patch(img, [[10, 15, 150, 50]])
-    assert p.shape == (80, 300, 4)
-    assert p[5, 290, 3] == 0 and p[:, :, 3].max() == 255  # transparent away from the text
+
+def test_analyze_line_colours_room_and_glyphs():
+    from gamelens.render import analyze_line, luminance
+
+    img = _ui_frame()
+    label = analyze_line(img, [38, 44, 56, 20])
+    assert luminance(label.fg) < 120 < luminance(label.bg)  # dark text on the light panel
+    assert label.free_right > 200 and label.free_right < 330  # runs up to the pill, not through it
+    assert 10 <= label.glyph_h <= 20
+    val = analyze_line(img, [442, 46, 36, 20])
+    assert luminance(val.bg) > 240 and abs(val.free_left - val.free_right) < 20  # centred in the pill
+    head = analyze_line(img, [32, 112, 84, 22])  # the box starts at the very edge of the dark bar
+    assert luminance(head.bg) < 80 < luminance(head.fg) and head.free_right > 300
+
+
+def test_erase_lines_covers_only_the_glyphs():
+    from gamelens.render import analyze_line, contrast_outline, erase_lines, outline_for
+
+    img = _ui_frame()
+    label = analyze_line(img, [38, 44, 56, 20])
+    p = erase_lines(img, [label])
+    assert p.shape == (200, 600, 4) and p[150, 300, 3] == 0 and p[:, :, 3].max() == 255
     painted = p[:, :, 3] > 200
-    assert np.abs(p[painted][:, :3].astype(int) - [60, 40, 30]).mean() < 40  # glyphs filled with the box colour
+    assert np.abs(p[painted][:, :3].astype(int) - [225, 215, 205]).max() < 25  # filled with the panel colour
+    assert p[40:76, 360:560, 3].max() == 0  # the pill next to it is untouched
+    assert erase_lines(img, []) is None
     assert contrast_outline("#ffffff") == "#101010" and contrast_outline("#000000") == "#f4f4f4"
+    assert outline_for("#303030", "#f0f0f0") == "#f0f0f0" and outline_for("#808080", "#909090") == "#f4f4f4"
+    # over a picture: light text gets a dark outline, text darker than its background a light one
+    assert outline_for("#f5f5f5", "#405060", False) == "#101010" and outline_for("#a09080", "#f8ecd5", False) == "#f4f4f4"
+
+
+def test_screen_layout_keeps_one_size_and_uses_the_room():
+    from gamelens.screen import common_heights, has_source_text, lines_to_translate, paragraphs, place, screen_items
+
+    assert has_source_text("画質", "ja") and has_source_text("オリジナル", "ja")
+    assert not has_source_text("90FPS", "ja") and not has_source_text("1280×720", "ja") and has_source_text("OFF", "en")
+    lines = [{"id": "a", "bbox": [0, 0, 10, 10], "text": "TAA"}, {"id": "b", "bbox": [0, 0, 10, 10], "text": "垂直同期"}]
+    assert [l["id"] for l in lines_to_translate(lines, [], "ja")] == ["b"]
+    unsure = [{"id": "e", "bbox": [0, 0, 40, 40], "text": "米", "conf": 0.66}]  # an emblem "read" as a character
+    assert lines_to_translate(unsure, [], "ja") == []
+    assert common_heights([13, 16, 17, 18, 27]) == [16.0, 17.0, 17.0, 17.0, 27.0]
+
+    img = _ui_frame()
+    ocr = [{"id": "l", "bbox": [38, 44, 56, 20], "text": "x"}, {"id": "v", "bbox": [442, 46, 36, 20], "text": "x"},
+           {"id": "n", "bbox": [32, 112, 84, 22], "text": "x"}]
+    assert [len(g) for g in paragraphs(ocr)] == [1, 1, 1]  # a label, a value, a heading: no running text here
+    items = screen_items(img, paragraphs(ocr), {"l": "ป้ายที่ยาวกว่าต้นฉบับมาก", "v": "ค่า", "n": ""}, 0.9)
+    assert len(items) == 2  # the line without a translation is left alone
+    label, val = items
+    assert label.align == "left" and 38 <= label.rect[0] <= 44 and label.rect[2] > 200  # may run over the empty panel
+    assert val.align == "center" and abs((val.rect[0] + val.rect[2] / 2) - 460) < 12  # centred in the pill
+    assert label.patch is not None and label.patch.pixelColor(50, 125).alpha() == 0  # untranslated heading not erased
+    assert label.outline and label.fg != label.outline
 
 
 def test_text_rect_for_dialog_and_name():
@@ -172,7 +260,7 @@ def test_ink_map_keeps_thin_strokes_when_shrinking():
     img = np.full((160, 980, 3), (45, 30, 20), np.uint8)
     cv2.putText(img, "thin text line here", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (245, 245, 245), 1)
     m = ink_map(img, "light")
-    assert m.shape[1] == 320 and has_text(m)
+    assert m.shape[1] == 320 and m.mean() > 0.002
 
 
 def test_cluster_lines_and_suggested_regions():
@@ -189,11 +277,20 @@ def test_cluster_lines_and_suggested_regions():
     assert len(blocks) == 3
     dialog = next(b for b in blocks if b["lines"] == 2)
     assert dialog["text"] == "指揮官、おはよう。ね今日はいい天気だね。" and dialog["bbox"][2] == 590
-    kind, rect = suggest_region(dialog, 1280, 720, blocks)
+    kind, rect, align = suggest_region(dialog, 1280, 720, blocks)
     assert kind == "dialog" and rect[0] < 180 / 1280 and rect[2] > 450 / 1280 and rect[1] + rect[3] <= 1.0
     name = next(b for b in blocks if b["text"] == "ラフィー")
-    kind, rect = suggest_region(name, 1280, 720, blocks)
+    assert align == "left"
+    kind, rect, _ = suggest_region(name, 1280, 720, blocks)
     assert kind == "name" and rect[2] < 0.3
+    # subtitle-style dialogue set around the middle of the screen: a centred region, wide enough for long lines
+    mid = cluster_lines([{"bbox": [520, 602, 240, 17], "text": "ああ、これは天道の塔だ。"}, {"bbox": [600, 555, 80, 20], "text": "ファランタ"}])
+    line = next(b for b in mid if b["text"].startswith("ああ"))
+    kind, rect, align = suggest_region(line, 1280, 720, mid)
+    assert (kind, align) == ("dialog", "center") and abs(rect[0] + rect[2] / 2 - 0.5) < 0.01 and rect[2] > 0.6
+    who = next(b for b in mid if b["text"] == "ファランタ")
+    kind, rect, align = suggest_region(who, 1280, 720, mid)
+    assert (kind, align) == ("name", "center") and abs(rect[0] + rect[2] / 2 - 0.5) < 0.01
     # one short dialogue line with nothing below it is dialogue, not a name
     one = cluster_lines([{"bbox": [180, 540, 200, 34], "text": "はい"}])
     assert suggest_region(one[0], 1280, 720, one)[0] == "dialog"
@@ -242,23 +339,57 @@ def test_snap_dialog_region_to_its_box():
     frame[518:677, 154:1126] = (55, 45, 27)  # the dialogue box
     frame[545:575, 183:640] = (245, 245, 245)  # its text
     blocks = cluster_lines([{"bbox": [183, 545, 457, 30], "text": "指揮官、おはよう……今日はいい天気だね。"}])
-    kind, rect = suggest_region(blocks[0], 1280, 720, blocks)
+    kind, rect, _ = suggest_region(blocks[0], 1280, 720, blocks)
     x, y, w, h = snap_to_box(frame, blocks[0], rect)
     assert kind == "dialog" and abs((x + w) * 1280 - 1120) < 12 and abs((y + h) * 720 - 670) < 12
 
 
-def test_is_continuation_tells_typing_from_a_new_line():
-    from gamelens.app import is_continuation
-
-    half, full, other = ink_map(box(100)), ink_map(box(300)), ink_map(box(0))
-    other[10:20, 150:300] = True
-    assert is_continuation(half, full)  # same line, more text
-    assert not is_continuation(full, other)  # replaced by a different line
-    assert not is_continuation(full, half) and not is_continuation(None, full)
-
-
 def test_in_any_skips_lines_inside_regions():
-    from gamelens.app import in_any
+    from gamelens.screen import in_any
 
     assert in_any([110, 110, 20, 10], [(100, 100, 200, 50)])
     assert not in_any([10, 10, 20, 10], [(100, 100, 200, 50)]) and not in_any([10, 10, 20, 10], [])
+
+
+def test_region_item_for_a_dialogue_box():
+    from gamelens.screen import region_item
+
+    crop = np.full((160, 900, 3), (55, 45, 27), np.uint8)  # a dark dialogue box with two lines of light text
+    cv2.putText(crop, "first line of text", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (245, 245, 245), 2, cv2.LINE_AA)
+    cv2.putText(crop, "second line", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (245, 245, 245), 2, cv2.LINE_AA)
+    boxes = [[28, 26, 290, 32], [28, 71, 190, 32]]
+    it = region_item(crop, (150, 520, 900, 160), boxes, "บรรทัดแรกของข้อความ บรรทัดที่สอง", "dialog", "left", 0.9)
+    assert it.rect[0] == 178 and it.rect[1] == 546 and it.rect[2] > 800  # from the first line, across the box
+    assert int(it.fg[1:3], 16) > 200 and int(it.outline[1:3], 16) < 90  # light text, outline in the box colour
+    assert 18 <= it.max_px <= 34 and it.patch is not None and it.patch_pos == (150, 520)
+    assert it.patch.pixelColor(40, 40).alpha() > 200 and it.patch.pixelColor(600, 140).alpha() == 0
+    assert region_item(crop, (150, 520, 900, 160), boxes, "", "dialog", "left", 0.9) is None
+
+
+
+def test_paragraphs_join_running_text_but_not_list_rows():
+    from gamelens.screen import paragraphs, place_block, requests, screen_items
+
+    # a description of three tightly stacked lines, then list rows spaced a full line apart
+    para = [{"id": f"p{i}", "bbox": [80, 100 + i * 27, 380 - i * 40, 20], "text": t}
+            for i, t in enumerate(["また、桃の花が咲く季節が来たね", "最近みんなはどんな悩みを", "抱えているのかな？"])]
+    rows = [{"id": f"r{i}", "bbox": [80, 300 + i * 38, 90, 20], "text": t} for i, t in enumerate(["攻撃力", "物理防御力", "魔法防御力"])]
+    groups = paragraphs(rows + para)
+    assert sorted(len(g) for g in groups) == [1, 1, 1, 3]
+    req = requests(groups, "ja")
+    block = next(r for r in req if r["id"] == "p0")
+    assert block["src"] == "また、桃の花が咲く季節が来たね最近みんなはどんな悩みを抱えているのかな？"
+    # two centred subtitle lines of different lengths are one block too
+    centred = paragraphs([{"id": "a", "bbox": [300, 500, 400, 24], "text": "x"}, {"id": "b", "bbox": [200, 532, 600, 24], "text": "y"}])
+    assert [len(g) for g in centred] == [2]
+
+    img = np.full((420, 600, 3), (238, 233, 228), np.uint8)
+    for i, w in enumerate((380, 340, 300)):
+        cv2.putText(img, "x" * (w // 19), (80, 117 + i * 27), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    items = screen_items(img, [para], {"p0": "อีกครั้งแล้วนะ ถึงฤดูที่ดอกพีชบานอีกแล้ว ช่วงนี้ทุกคนมีเรื่องกังวลอะไรกันบ้างนะ"}, 0.9)
+    assert len(items) == 1
+    it = items[0]
+    assert it.align == "left" and not it.vcenter and 76 <= it.rect[0] <= 84  # one block, from the paragraph's left edge
+    assert it.rect[2] >= 380 and it.rect[3] >= 70  # as wide as the longest line at least, and all its lines deep
+    for y in (110, 137, 164):
+        assert it.patch.pixelColor(100, y).alpha() > 0  # every original line is covered

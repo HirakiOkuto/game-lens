@@ -22,18 +22,18 @@ from . import win32
 from .api import LensClient, LensError
 from .capture import GameCapture
 from .history import HistoryLog, HistoryWindow
-from .overlay import Item, Overlay, text_rect_for, to_qimage
+from .overlay import Overlay
 from .panel import Panel
 from .picker import GamePicker
 from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .render import erase_patch
+from .screen import in_any, lines_to_translate, paragraphs, refresh_patch, region_item, requests, screen_items
 from .services import MODEL_NAMES, MODELS, ServerManager
 from .ui_style import QSS
-from .watcher import RegionWatcher, changed_pixels, has_text, ink_map, similar
+from .watcher import RegionWatcher, changed_pixels, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
-INSTANCE_KEY = "game-lens-ui"
+INSTANCE_KEY = os.environ.get("GAMELENS_INSTANCE", "game-lens-ui")  # one running copy per key (tests use their own)
 log = logging.getLogger("gamelens")
 
 
@@ -117,21 +117,6 @@ def friendly_error(err: str) -> str:
     return "แปลไม่สำเร็จ: " + err.split(": ", 1)[-1][:80]
 
 
-def is_continuation(before: np.ndarray | None, now: np.ndarray) -> bool:
-    """True when the text read a moment ago is still there with more added (a typewriter effect that paused),
-    False when it was replaced by a new line."""
-    if before is None or before.dtype != bool or now.dtype != bool or before.shape != now.shape:
-        return False
-    n = int(before.sum())
-    return n > 0 and int((before & now).sum()) / n > 0.8 and int(now.sum()) > n
-
-
-def in_any(bbox: list[int], rects: list) -> bool:
-    """True when the centre of bbox lies inside one of rects (x, y, w, h)."""
-    cx, cy = bbox[0] + bbox[2] / 2, bbox[1] + bbox[3] / 2
-    return any(x <= cx <= x + w and y <= cy <= y + h for x, y, w, h in rects)
-
-
 def region_px(rect: list[float], shape) -> tuple[int, int, int, int]:
     H, W = shape[:2]
     x, y = int(rect[0] * W), int(rect[1] * H)
@@ -183,8 +168,6 @@ class Controller(QObject):
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
-        self.last_stable: dict[str, float] = {}
-        self.stable_ink: dict[str, np.ndarray] = {}
         self.waiting_toast = -99.0
         # automatic whole-screen translation (menus, quest lists): when the whole picture stands still
         self.auto_screen = self.settings.auto_screen or os.environ.get("GAMELENS_AUTO_SCREEN") == "1"
@@ -531,25 +514,16 @@ class Controller(QObject):
             px = region_px(r.rect, frame.shape)
             x, y, w, h = px
             crop = frame[y : y + h, x : x + w]
-            ink = ink_map(crop, r.ink)
-            ev = self.watchers[r.id].feed(ink, now)
+            wt = self.watchers[r.id]
+            was = wt.stable_s
+            ev = wt.feed(stroke_map(crop, r.ink), now)
+            if wt.stable_s != was:
+                log.info("region %s: waits %d ms for text to settle now", r.id, wt.stable_s * 1000)
             if ev == "changed":
                 self.gen[r.id] += 1
                 self.overlay.clear(r.id)  # never leave an old translation over new text
                 self.overlay.set_pending(r.id, None)
-                wt = self.watchers[r.id]
-                if (now - self.last_stable.get(r.id, -9) < 1.2 and wt.stable_s < 1.0
-                        and is_continuation(self.stable_ink.get(r.id), ink)):
-                    # the same line went on typing right after we read it: this game pauses mid-line, so wait
-                    # a little longer before reading from now on
-                    wt.stable_s = min(1.0, wt.stable_s + 0.1)
-                    log.info("region %s: stable time now %d ms", r.id, wt.stable_s * 1000)
             elif ev == "stable":
-                self.last_stable[r.id] = now
-                self.stable_ink[r.id] = ink
-                if not has_text(ink):
-                    self.shown.pop(r.id, None)
-                    continue
                 if not self.health:
                     self.watchers[r.id].force(now)  # the server is still starting: read it once it is up
                     if now - self.waiting_toast > 15:
@@ -560,11 +534,19 @@ class Controller(QObject):
                     self.watchers[r.id].force(now)  # read again once the running request is back
                     continue
                 self.busy.add(r.id)
-                self.pool.submit(self.job_region, r, px, crop.copy(), self.gen[r.id])
+                self.pool.submit(self.job_region, r, px, crop.copy(), self.gen[r.id], wt.persistent)
+            else:
+                # text over the moving scene: paint the covered glyphs again from this frame, so what hides
+                # them moves with the scene instead of standing still on top of it
+                live = [it for it in self.overlay.items.get(r.id, ()) if getattr(it, "_live", False)]
+                for it in live:
+                    refresh_patch(it, crop)
+                if live:
+                    self.overlay.update()
 
-    def job_region(self, r, px, crop: np.ndarray, gen: int):
+    def job_region(self, r, px, crop: np.ndarray, gen: int, strokes=None):
         try:
-            payload = self._region_payload(r, px, crop, gen)
+            payload = self._region_payload(r, px, crop, gen, strokes)
         except LensError as e:
             log.warning("region %s: %s", r.id, e)
             payload = {"error": str(e)}
@@ -573,7 +555,7 @@ class Controller(QObject):
             payload = {"error": f"{type(e).__name__}: {e}"}
         self.bridge.region_done.emit(r.id, gen, payload)
 
-    def _region_payload(self, r, px, crop, gen) -> dict | None:
+    def _region_payload(self, r, px, crop, gen, strokes=None) -> dict | None:
         p = self.profile
         t0 = time.perf_counter()
         ocr = self.api.ocr_lines(crop, p.src_lang)
@@ -594,16 +576,8 @@ class Controller(QObject):
         tl = res["lines"].get("a", "")
         log.info("region %s %s %d ms%s: %r", r.id, res.get("engine"), (time.perf_counter() - t1) * 1000,
                  " (cache)" if res.get("cached") else "", tl)
-        boxes = [l["bbox"] for l in lines]
-        patch = erase_patch(crop, boxes)
-        heights = sorted(b[3] for b in boxes)
-        # line boxes are tight around the glyphs: the font's pixel size is a little more than the ink height
-        size = min(heights[len(heights) // 2] * 1.15, 0.8 * px[3])  # never taller than the region
-        item = Item(rect=text_rect_for(px, boxes, r.kind), text=tl, fg=lines[0].get("fg", "#ffffff"),
-                    max_px=max(12.0, size * p.font_scale), vcenter=r.kind != "dialog", align=r.align, bold=r.kind == "name",
-                    patch=to_qimage(patch) if patch is not None and tl else None, patch_pos=(px[0], px[1]))
-        item._scale = p.font_scale
-        return {"src": text, "tl": tl, "items": [item] if tl else [], "engine": res.get("engine", ""), "kind": r.kind}
+        item = region_item(crop, px, [l["bbox"] for l in lines], tl, r.kind, r.align, p.font_scale, strokes)
+        return {"src": text, "tl": tl, "items": [item] if item else [], "engine": res.get("engine", ""), "kind": r.kind}
 
     def on_region_done(self, rid: str, gen: int, payload):
         self.busy.discard(rid)
@@ -686,26 +660,16 @@ class Controller(QObject):
         p = self.profile
         try:
             ocr = self.api.ocr_lines(frame, p.src_lang)
-            lines = [l for l in ocr["lines"] if any(c.isalpha() for c in l["text"]) and not in_any(l["bbox"], skip)]
+            lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if not lines:
                 self.bridge.screen_done.emit(gen, None if auto else [])
                 return
-            res = self.api.translate_lines([{"id": l["id"], "src": l["text"], "kind": "ui"} for l in lines], series=p.series,
-                                           target=p.target, src_lang=p.src_lang, engine=p.engine,
-                                           allow_cloud=p.engine in REMOTE, context=[])
-            patch = erase_patch(frame, [l["bbox"] for l in lines])
-            items = []
-            for l in lines:
-                tl = res["lines"].get(l["id"], "")
-                if not tl:
-                    continue
-                x, y, w, h = l["bbox"]
-                pad = int(0.45 * h)
-                items.append(Item(rect=(x, y - pad, int(w * 1.25) + 8, h + 2 * pad), text=tl, fg=l.get("fg", "#ffffff"),
-                                  max_px=max(11.0, h * 1.15 * p.font_scale), vcenter=True))
-            if patch is not None and items:
-                items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)
+            groups = paragraphs(lines)
+            res = self.api.translate_lines(requests(groups, p.src_lang), series=p.series, target=p.target,
+                                           src_lang=p.src_lang, engine=p.engine, allow_cloud=p.engine in REMOTE,
+                                           context=[])
+            items = screen_items(frame, groups, res["lines"], p.font_scale)
             log.info("screen: %d translated by %s", len(items), res.get("engine"))
             self.bridge.screen_done.emit(gen, items if items or not auto else None)
         except Exception as e:  # noqa: BLE001

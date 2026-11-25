@@ -152,17 +152,3 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         lines = _drop_ruby(lines)
     lines = _rows(lines)
     return lines
-
-
-def line_colors(img: np.ndarray, bbox: list[int]) -> dict:
-    """Text and background colour of one line: Otsu split of the crop; the smaller class is the ink."""
-    x, y, w, h = bbox
-    crop = img[y : y + h, x : x + w]
-    if not crop.size:
-        return {"fg": "#ffffff", "bg": "#000000"}
-    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
-    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    bright = th > 0
-    ink = bright if bright.mean() < 0.5 else ~bright
-    hexc = lambda px: "#%02x%02x%02x" % tuple(int(v) for v in np.median(px, 0)) if len(px) else None  # noqa: E731
-    return {"fg": hexc(crop[ink]) or "#ffffff", "bg": hexc(crop[~ink]) or "#000000"}

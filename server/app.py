@@ -108,7 +108,7 @@ def health():
     return {"ok": True, "app": "game-lens", **up, "targets": SUPPORTED_TARGETS}
 
 
-GAME_ENGINES = ("local", "cloud", "google", "tgemma", "plamo", "hymt", "deepl", "azure", "google_free")
+GAME_ENGINES = ("local", "cloud", "google", "tgemma", "plamo", "hymt", "index", "deepl", "azure", "google_free")
 
 
 @app.post("/ocr/lines", dependencies=[Depends(auth)])

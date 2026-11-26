@@ -441,6 +441,48 @@ class HyMtEngine:
         return out
 
 
+class IndexTranslateEngine(HyMtEngine):
+    """Bilibili's Index-Translate (150 languages) on a local llama.cpp server, with its documented "instTrans"
+    prompt: names as a hard terminology constraint, the earlier lines and the kind of text as notes.
+    Start it with:  llama serve -m models/Index-Translate-9B.Q4_K_M.gguf --port 9944 -c 8192 --jinja
+    """
+
+    name = "index"
+    ZH = {"ja": "日语", "ko": "韩语", "zh": "中文", "zh-cn": "简体中文", "zh-hk": "繁体中文", "zh-tw": "繁体中文",
+          "en": "英语", "th": "泰语", "vi": "越南语", "id": "印尼语", "es": "西班牙语", "es-la": "西班牙语",
+          "pt": "葡萄牙语", "pt-br": "葡萄牙语", "fr": "法语", "de": "德语", "it": "意大利语", "ru": "俄语",
+          "ar": "阿拉伯语", "ms": "马来语", "tl": "菲律宾语"}
+    HISTORY = 4
+
+    def __init__(self):
+        self.url = os.environ.get("INDEX_URL", "http://127.0.0.1:9944")
+
+    def _prompt(self, text: str, history: list[tuple[str, str]], glossary: list[tuple[str, str]], target: str,
+                style: str = "manga") -> str:
+        tl = self.ZH.get(target, self.NAMES.get(target, target))
+        what = "电子游戏中的对白、角色名或菜单文字" if style == "game" else "漫画的对白气泡或旁白"
+        cons = []
+        if glossary:
+            cons.append("【硬性要求】术语对照：" + "，".join(f"{a} -> {b}" for a, b in glossary))
+        cons.append(f"【注意】这是{what}，译文要口语化、自然，像官方本地化一样符合角色说话的语气")
+        if history:
+            cons.append("【注意】前文（仅供理解语境，不要翻译）：" + " / ".join(f"{a} => {b}" for a, b in history[-self.HISTORY:]))
+        rules = "\n".join(f"{i}. {c}" for i, c in enumerate(cons, 1))
+        return (f"请将以下文本翻译成{tl}，并且严格遵循所有约束要求。\n\n【源文】\n{text.strip()}\n\n【约束要求】\n{rules}"
+                "\n\n只输出译文，不要有任何额外说明。")
+
+    def _ask(self, prompt: str) -> str:
+        body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True,
+                "chat_template_kwargs": {"enable_thinking": False}}
+        try:
+            r = httpx.post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
+        except httpx.HTTPError as e:
+            raise EngineError(f"Index-Translate unreachable at {self.url}: {e}") from e
+        if r.status_code != 200:
+            raise EngineError(f"Index-Translate HTTP {r.status_code}: {r.text[:200]}")
+        return (r.json()["choices"][0]["message"].get("content") or "").replace("\ufffd", "").strip()
+
+
 NOISE_RE = re.compile(r"[A-Za-z]{1,2}[\s?!.•·]*")  # a lone Latin letter or two from OCR ("E", "O") is noise
 
 
@@ -491,7 +533,7 @@ _engines: dict[str, object] = {}
 WEB = {"deepl", "azure", "google_free"}  # translate/web_engines.py
 REMOTE = {"cloud", "google"} | WEB  # engines that send text off this machine (need per-site permission)
 MT = {"google", "tgemma"}  # sentence-level machine translation: one text box at a time, no prompt/glossary
-NO_GLOSSARY_EXTRACTION = MT | WEB | {"plamo", "hymt"}  # translation-only models cannot extract a glossary
+NO_GLOSSARY_EXTRACTION = MT | WEB | {"plamo", "hymt", "index"}  # translation-only models cannot extract a glossary
 
 
 def get_engine(name: str):
@@ -504,7 +546,7 @@ def get_engine(name: str):
             return _engines[name]
         _engines[name] = {"local": LlamaCppEngine, "cloud": ClaudeEngine, "google": GoogleTranslateEngine,
                           "tgemma": TranslateGemmaEngine, "plamo": PlamoTranslateEngine,
-                          "hymt": HyMtEngine}[name]()
+                          "hymt": HyMtEngine, "index": IndexTranslateEngine}[name]()
     return _engines[name]
 
 

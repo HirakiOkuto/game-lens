@@ -17,10 +17,14 @@ SERVER_PORT = 9960
 MODELS = {
     # engine -> (port, llama serve arguments); only one fits in VRAM next to the game
     "hymt": (9943, ["-m", "{models}/{hymt}", "--port", "9943", "-c", "8192", "--jinja", "--alias", "hymt"]),
+    "index": (9944, ["-m", "{models}/Index-Translate-9B.Q4_K_M.gguf", "--port", "9944", "-c", "8192", "--jinja",
+                     "--alias", "index"]),
     "local": (9940, ["-hf", "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M", "--no-mmproj", "--port", "9940", "-c", "16384",
                      "--jinja", "--alias", "gemma26b"]),
 }
-MODEL_NAMES = {"hymt": "Hy-MT2", "local": "Gemma 26B"}
+MODEL_NAMES = {"hymt": "Hy-MT2", "index": "Index-Translate 9B", "local": "Gemma 26B"}
+INDEX_FILE = ("Index-Translate-9B.Q4_K_M.gguf",
+              "https://huggingface.co/IndexTeam/Index-Translate-9B-GGUF/resolve/main/Index-Translate-9B.Q4_K_M.gguf")
 # Hy-MT2 comes in two sizes: (name, file, where it is downloaded from by itself when it is not there)
 HYMT = {
     "7b": ("Hy-MT2 7B", "Hy-MT2-7B-Q4_K_M.gguf",
@@ -134,9 +138,12 @@ class ServerManager:
 
     def download_model(self, engine: str, say) -> bool:
         """Fetch the engine's model file if it is missing (resumes a broken download). say(text) reports progress."""
-        if engine != "hymt":
+        if engine == "hymt":
+            _, name, url = HYMT[self.hymt]
+        elif engine == "index":
+            name, url = INDEX_FILE
+        else:
             return True
-        _, name, url = HYMT[self.hymt]
         dest = self.models / name
         if dest.exists():
             return True
@@ -191,7 +198,7 @@ class ServerManager:
         if self.server_up():
             return
         env = dict(os.environ, LLM_URL="http://127.0.0.1:9940/v1", LLM_MODEL="gemma26b",
-                   HYMT_URL="http://127.0.0.1:9943", PYTHONIOENCODING="utf-8")
+                   HYMT_URL="http://127.0.0.1:9943", INDEX_URL="http://127.0.0.1:9944", PYTHONIOENCODING="utf-8")
         env["PYTHONNOUSERSITE"] = "1"
         py = self.python()
         self._spawn("server", [str(py), "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(SERVER_PORT)],
@@ -212,7 +219,7 @@ class ServerManager:
             if not self.server_up():
                 say("starting", "กำลังเปิดระบบแปล…")
                 self.start_server()
-            if engine == "hymt" and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
+            if engine in ("hymt", "index") and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
                 say("error", self.detail)
                 return False
             if engine in MODELS and not self.model_up(engine):

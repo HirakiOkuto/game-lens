@@ -464,3 +464,27 @@ def test_read_dialog_ignores_text_that_is_not_centred_and_rereads_doubtful_lines
     part, whole = [L(650, 250, "る……これは……？", 0.8)], [L(402, 500, "くっ……体がベタベタする……これは……？", 0.95)]
     readings(part, whole)
     assert ocr.read_dialog(img, "ja", True, jp) == whole and len(calls) == 2  # half a line over a bright scene: read again
+
+
+def test_index_translate_gets_names_as_a_hard_constraint(monkeypatch):
+    sent = []
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"choices": [{"message": {"content": "ไปกันเถอะ Mitty�"}}]}
+
+    def fake_post(url, json, timeout):
+        sent.append(json)
+        return Resp()
+
+    monkeypatch.setattr(engines.httpx, "post", fake_post)
+    e = engines.IndexTranslateEngine()
+    out = e.translate_page(["ミイティ、行こう"], "ja", "th", [{"src": "おはよう", "tl": "อรุณสวัสดิ์"}],
+                           {"characters": [{"src": "ミィティ", "tl": "Mitty"}]}, style="game")
+    assert out == ["ไปกันเถอะ Mitty"]  # broken bytes dropped
+    p = sent[0]["messages"][0]["content"]
+    assert "翻译成泰语" in p and "【源文】\nミイティ、行こう" in p and "ミイティ -> Mitty" in p and "おはよう => อรุณสวัสดิ์" in p
+    assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False} and sent[0]["temperature"] == 0
+    assert engines.engine_order("index", False)[0] == ["index", "local"]

@@ -23,6 +23,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import win32
 from .api import LensClient, LensError
 from .capture import GameCapture
+from .glossary import add_correction
 from .history import HistoryLog, HistoryWindow
 from .i18n import set_lang, t
 from .overlay import Overlay
@@ -66,6 +67,7 @@ class Bridge(QObject):
     server_state = Signal(str, str)
     engine_test = Signal(dict)
     keys = Signal(dict)
+    retranslate = Signal()
 
 
 def app_icon() -> QIcon:
@@ -167,6 +169,7 @@ class Controller(QObject):
         self.bridge.server_state.connect(lambda s, d: self.refresh_panel())
         self.bridge.engine_test.connect(self.on_engine_test)
         self.bridge.keys.connect(lambda k: self.panel.set_keys(k))
+        self.bridge.retranslate.connect(self.translate_again)
 
         self.overlay = Overlay(self.profile.font_family)
         self.overlay.winId()  # native window exists from the start: hotkeys are delivered to it
@@ -200,6 +203,7 @@ class Controller(QObject):
         self.next_keys, self.keys_told = 0.0, False  # see keep_english_keys
         self.keys_possible = True
         self.screen_busy = False
+        self.screen_engine = ""
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
         self.waiting_toast = -99.0
@@ -951,7 +955,12 @@ class Controller(QObject):
             res = self.api.translate_lines(requests(groups, p.src_lang), series=p.series, target=p.target,
                                            src_lang=p.src_lang, engine=p.live_engine or p.engine, allow_cloud=p.engine in REMOTE,
                                            context=[])
+            reqs = requests(groups, p.src_lang)
             items = screen_items(frame, groups, res["lines"], p.font_scale, [l["bbox"] for l in ocr["lines"]])
+            src_of = {r["id"]: r["src"] for r in reqs}
+            for it in items:
+                it._src = src_of.get(getattr(it, "_id", ""), "")
+            self.screen_engine = res.get("engine", "")
             log.info("screen: %d translated by %s", len(items), res.get("engine"))
             self.bridge.screen_done.emit(gen, items if items or not auto else None)
         except Exception as e:  # noqa: BLE001
@@ -982,6 +991,11 @@ class Controller(QObject):
         if not items:
             self.toast(t("No text on the screen"), 2)
         self.overlay.set_items("screen", items)
+        for it in items:  # into the history too: a menu's translation can be corrected there
+            if getattr(it, "_src", ""):
+                e = self.history.add("ui", it._src, it.text, self.screen_engine)
+                if self.history_win:
+                    self.history_win.append(e)
         # a menu (many labels; or asked for with F9): the regions' own translations would be pieces of it
         self.screen_menu = len(items) >= 8 or not self.screen_auto or not self.someone_speaking()
         if self.screen_menu:
@@ -1065,11 +1079,45 @@ class Controller(QObject):
         self.editor.activateWindow()
         self.editor.setFocus()
 
+    def fix_translation(self, src: str, tl: str, kind: str):
+        """A correction from the history window: into the game's glossary file, to the server, and what is on the
+        screen is translated again with it."""
+        p = self.profile
+        path = ROOT / "glossaries" / f"{p.series}.{p.target}.json"
+        try:
+            add_correction(path, src, tl, kind)
+        except (OSError, ValueError) as e:
+            self.notify(t("The correction could not be saved"), str(e)[:200])
+            return
+        log.info("correction %s -> %s (%s) in %s", src, tl, kind, path.name)
+        self.genders = None
+        self.toast(t("Saved: {src} → {tl}", src=src[:20], tl=tl[:20]), 3)
+
+        def sync():
+            self.sync_glossary()
+            self.bridge.retranslate.emit()
+
+        self.pool.submit(sync)
+
+    def translate_again(self):
+        """Everything on the screen once more (after the glossary changed)."""
+        self.shown.clear()
+        self.shown_seq.clear()
+        screen, auto, menu = self.screen_ref is not None, self.screen_auto, self.screen_menu
+        self.reset_watchers()
+        if screen and self.cap:
+            frame, _ = self.cap.client_frame()
+            self.dismiss_screen()
+            if frame is not None:
+                self.screen_menu = menu
+                self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
+
     def show_history(self):
         if self.history_win is None:
             self.history_win = HistoryWindow(self.history)
             self.history_win.setWindowIcon(app_icon())
             self.history_win.build_glossary.connect(lambda: self.pool.submit(self.build_glossary))
+            self.history_win.fix.connect(self.fix_translation)
         if self.history_win.isVisible():
             self.history_win.hide()
         else:

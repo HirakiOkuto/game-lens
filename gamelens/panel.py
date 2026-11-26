@@ -60,6 +60,7 @@ class Step(QWidget):
         self.set("idle", "")
 
     def set(self, state: str, detail: str, action: str | None = None, primary: bool = False):
+        self.state = state
         self.dot.setStyleSheet(f"color: {COLORS[state]}; font-size: 14pt;")
         self.detail.setText(detail)
         if action is None:
@@ -102,7 +103,7 @@ class Panel(QWidget):
         head = QHBoxLayout()
         title = QLabel("訳  game-lens")
         title.setObjectName("title")
-        sub = QLabel(t("Game text translated into Thai, drawn over the game"))
+        self.sub = sub = QLabel("")
         sub.setObjectName("muted")
         tcol = QVBoxLayout()
         tcol.setSpacing(0)
@@ -129,6 +130,24 @@ class Panel(QWidget):
         self.s_regions.button.clicked.connect(self.edit_regions.emit)
         for s in (self.s_server, self.s_game, self.s_regions):
             sl.addWidget(s)
+        # once all three are green they fold into one line (they take room that is needed for nothing then)
+        self.summary = QWidget()
+        sml = QHBoxLayout(self.summary)
+        sml.setContentsMargins(0, 2, 0, 2)
+        dot = QLabel("●")
+        dot.setFixedWidth(18)
+        dot.setStyleSheet(f"color: {OK}; font-size: 14pt;")
+        self.summary_text = QLabel("")
+        self.summary_text.setObjectName("muted")
+        self.summary_text.setWordWrap(True)
+        self.more = QPushButton("")
+        self.more.setObjectName("link")
+        self.more.clicked.connect(self._toggle_steps)
+        sml.addWidget(dot, 0, Qt.AlignmentFlag.AlignTop)
+        sml.addWidget(self.summary_text, 1)
+        sml.addWidget(self.more, 0, Qt.AlignmentFlag.AlignVCenter)
+        sl.addWidget(self.summary)
+        self.steps_open = False
 
         self.big = QPushButton(t("▶  Start translating"))
         self.big.setObjectName("big")
@@ -199,35 +218,47 @@ class Panel(QWidget):
         el.addWidget(self.key_box)
         el.addLayout(trow)
 
+        # languages
+        langs, ll = card(t("Languages"))
+        lg = QGridLayout()
         # display
         disp, dl = card(t("Display"))
         g = QGridLayout()
         g.addWidget(QLabel(t("Text size")), 0, 0)
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=60, maximum=130)
-        self.font.valueChanged.connect(lambda v: (self.font_val.setText(f"{v}%"), self.font_scale_changed.emit(v / 100)))
+        self.font.valueChanged.connect(lambda v: (self.font_val.setText(f"{v}%"), self._preview(),
+                                                  self.font_scale_changed.emit(v / 100)))
         self.font_val = QLabel("")
         self.font_val.setFixedWidth(44)
         g.addWidget(self.font, 0, 1)
         g.addWidget(self.font_val, 0, 2)
-        g.addWidget(QLabel(t("Font")), 3, 0)
+        g.addWidget(QLabel(t("Font")), 1, 0)
         self.family = QFontComboBox()
         self.family.setToolTip(t("The font of the translations drawn over the game (only fonts that have the letters "
                                  "of the language translated into are listed)"))
-        self.family.currentFontChanged.connect(lambda f: self.font_family_changed.emit(f.family()))
-        g.addWidget(self.family, 3, 1, 1, 2)
-        g.addWidget(QLabel(t("Game language")), 1, 0)
+        self.family.currentFontChanged.connect(lambda f: (self._preview(), self.font_family_changed.emit(f.family())))
+        g.addWidget(self.family, 1, 1, 1, 2)
+        # what the translations look like in that font and size, without going to the game
+        self.sample = QLabel("")
+        self.sample.setWordWrap(True)
+        self.sample.setMinimumHeight(44)
+        g.addWidget(self.sample, 2, 0, 1, 3)
+        lg.addWidget(QLabel(t("Game language")), 0, 0)
         self.src = QComboBox()
         for code, label in GAME_LANGS:
             self.src.addItem(t(label), code)
         self.src.currentIndexChanged.connect(lambda _: self.src_lang_changed.emit(self.src.currentData()))
-        g.addWidget(self.src, 1, 1, 1, 2)
-        g.addWidget(QLabel(t("Translate into")), 2, 0)
+        lg.addWidget(self.src, 0, 1)
+        lg.addWidget(QLabel(t("Translate into")), 1, 0)
         self.target = QComboBox()
         self.target.addItem(t("Thai"), "th")
         self.target.addItem(t("English"), "en")
         self.target.currentIndexChanged.connect(lambda _: (self._fonts_for(self.target.currentData()),
+                                                           self._for_target(self.target.currentData()),
                                                            self.target_changed.emit(self.target.currentData())))
-        g.addWidget(self.target, 2, 1, 1, 2)
+        lg.addWidget(self.target, 1, 1)
+        lg.setColumnStretch(1, 1)
+        ll.addLayout(lg)
         self.toasts = QCheckBox(t("Show short status messages on the game screen"))
         self.toasts.toggled.connect(self.toasts_changed.emit)
         self.english = QCheckBox(t("Switch the keyboard to English while in the game"))
@@ -238,9 +269,10 @@ class Panel(QWidget):
                                "This uses the translator more: mind the quota of a paid API."))
         self.auto.toggled.connect(self.auto_screen_changed.emit)
         dl.addLayout(g)
-        dl.addWidget(self.auto)
         dl.addWidget(self.toasts)
-        dl.addWidget(self.english)
+        opts, ol = card(t("While playing"))
+        ol.addWidget(self.auto)
+        ol.addWidget(self.english)
 
         # hotkeys
         keys, kl2 = card(t("Keys while playing"))
@@ -259,15 +291,21 @@ class Panel(QWidget):
         grid.setColumnStretch(3, 1)
         grid.setHorizontalSpacing(8)
         kl2.addLayout(grid)
+        self.keys_card = keys
+        keys.hide()
 
         foot = QHBoxLayout()
         hist = QPushButton(t("Translation history"))
         hist.clicked.connect(self.show_history.emit)
+        self.keys_btn = QPushButton(t("Keys"))
+        self.keys_btn.setCheckable(True)
+        self.keys_btn.toggled.connect(self.keys_card.setVisible)
         sc = QPushButton(t("Desktop icon"))
         sc.clicked.connect(self.make_shortcut.emit)
         q = QPushButton(t("Quit"))
         q.clicked.connect(self.quit_app.emit)
         foot.addWidget(hist)
+        foot.addWidget(self.keys_btn)
         foot.addWidget(sc)
         foot.addStretch()
         foot.addWidget(q)
@@ -282,7 +320,9 @@ class Panel(QWidget):
         lay.addWidget(self.big)
         lay.addWidget(self.big_hint)
         lay.addWidget(eng)
+        lay.addWidget(langs)
         lay.addWidget(disp)
+        lay.addWidget(opts)
         lay.addWidget(keys)
         lay.addLayout(foot)
         # a narrow window: drop-downs shrink to it (their lists still open as wide as their longest entry)
@@ -335,6 +375,7 @@ class Panel(QWidget):
         self.font_val.setText(f"{self.font.value()}%")
         self.target.setCurrentIndex(max(0, self.target.findData(target)))
         self._fonts_for(target)
+        self._for_target(target)
         if font_family:
             self.family.blockSignals(True)
             self.family.setCurrentFont(QFont(font_family))
@@ -343,6 +384,7 @@ class Panel(QWidget):
         for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(False)
         self._show_engine(engine)
+        self._preview()
 
     def set_running(self, running: bool, ready: bool, hint: str):
         running = running and ready  # "stop" only means something once it is actually translating
@@ -351,6 +393,7 @@ class Panel(QWidget):
         repolish(self.big)
         self.big.setEnabled(ready or running)
         self.big_hint.setText(hint)
+        self._fold_steps()
 
     def set_keys(self, masked: dict):
         for names in masked.values():
@@ -374,6 +417,42 @@ class Panel(QWidget):
         self.engine_status.setStyleSheet(f"color: {COLORS[state] if state != 'idle' else '#9aa3b2'};")
 
     # --- internal ---------------------------------------------------------------------------------------------
+    SAMPLES = {"th": "ผู้บัญชาการคะ ไปเดินเล่นกันไหม? HP +120",
+               "en": "Commander, shall we go for a walk? HP +120"}
+
+    def _for_target(self, target: str):
+        name = self.target.itemText(max(0, self.target.findData(target)))
+        self.sub.setText(t("Game text translated into {language}, drawn over the game", language=name))
+        self._preview()
+
+    def _preview(self):
+        """A line in the chosen font and size, as it would be drawn over a game's dark text box."""
+        if not hasattr(self, "sample"):
+            return
+        px = max(10, round(24 * self.font.value() / 100))
+        fam = self.family.currentFont().family().replace("'", "")
+        self.sample.setStyleSheet(f"background: #2c313b; border-radius: 8px; padding: 6px 10px; color: #f4f4f4; "
+                                  f"font-family: '{fam}'; font-size: {px}px;")
+        self.sample.setText(self.SAMPLES.get(self.target.currentData(), self.SAMPLES["en"]))
+
+    def _fold_steps(self):
+        steps = (self.s_server, self.s_game, self.s_regions)
+        ready = all(getattr(s, "state", "") == "ok" for s in steps)
+        folded = ready and not self.steps_open
+        for s in steps:
+            s.setVisible(not folded)
+        self.summary.setVisible(ready)
+        if ready:
+            regions = self.s_regions.detail.text().split(":")[0]
+            self.summary_text.setText(f"{self.s_server.detail.text()}\n{self.s_game.detail.text()} • {regions}"
+                                      if folded else "")
+            self.summary_text.setVisible(folded)
+            self.more.setText(t("Details") if folded else t("Hide details"))
+
+    def _toggle_steps(self):
+        self.steps_open = not self.steps_open
+        self._fold_steps()
+
     def _engine_picked(self):
         key = self.engine.currentData()
         self._show_engine(key)

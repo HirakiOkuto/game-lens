@@ -503,7 +503,7 @@ def test_paragraphs_join_running_text_but_not_list_rows():
 
     img = np.full((420, 600, 3), (238, 233, 228), np.uint8)
     for i, w in enumerate((380, 340, 300)):
-        cv2.putText(img, "x" * (w // 19), (80, 117 + i * 27), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+        cv2.putText(img, "x" * (w // 9), (80, 117 + i * 27), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)  # (as wide as its box, as text read off a screen is)
     items = screen_items(img, [para], {"p0": "อีกครั้งแล้วนะ ถึงฤดูที่ดอกพีชบานอีกแล้ว ช่วงนี้ทุกคนมีเรื่องกังวลอะไรกันบ้างนะ"}, 0.9)
     assert len(items) == 1
     it = items[0]
@@ -1069,7 +1069,12 @@ def test_labels_stay_on_their_panel_and_off_each_other():
     look = analyze_line(img, [438, 48, 40, 24])
     x, y, w, h = room_for((438, 40, 44, 40), "center", "กำลังดำเนินการอยู่นะ", 20, 600, [438, 48, 40, 24], [[438, 48, 40, 24]], look)
     assert w > 100 and x >= 100 and x + w <= 500 and x < 438
-    # left-aligned (a skill's name right of its icon): never to the left of where the original starts
+    # left-aligned with the card's empty middle on its left (a status at the card's right edge): also to the left
+    x, y, w, h = room_for((438, 40, 44, 40), "left", "กำลังดำเนินการอยู่นะ", 20, 600, [438, 48, 40, 24], [[438, 48, 40, 24]], look)
+    assert w > 100 and x < 438 and x >= 100
+    # a skill's name with its icon right beside it on the left: never over the icon
+    cv2.circle(img, (422, 60), 12, (90, 160, 120), -1)
+    look = analyze_line(img, [438, 48, 40, 24])
     x, y, w, h = room_for((438, 40, 44, 40), "left", "กำลังดำเนินการอยู่นะ", 20, 600, [438, 48, 40, 24], [[438, 48, 40, 24]], look)
     assert x == 438
     # two translations of one row given the same room: they share it

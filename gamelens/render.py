@@ -143,7 +143,14 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     ends = np.median(end_px, 0)
     solid = (np.abs(end_px - ends).max(1) < 20).mean() >= 0.85  # one colour there, not cut-through letters
     sides = cands[:-1]
-    if solid and sides and w >= 3 * h and all(np.abs(c - ends).max() < 30 for c in sides):
+    # ...and further out too: light letters with a glow have the glow's colour at their ends and just beside them,
+    # but the picture they stand on beyond it
+    far = []
+    for fx0, fx1 in ((x0 - 2 - 3 * sw, x0 - 2 - 2 * sw), (x1 + 2 + 2 * sw, x1 + 2 + 3 * sw)):
+        fx0, fx1 = max(0, fx0), min(W, fx1)
+        if fx1 - fx0 >= 2:
+            far.append(np.median(frame[b0:b1, fx0:fx1].reshape(-1, 3), 0))
+    if solid and sides and w >= 3 * h and all(np.abs(c - ends).max() < 30 for c in sides + far):
         bg = ends
     else:
         if solid:
@@ -177,6 +184,19 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
         glow = mid.size and mid.mean() > 0.35 and found.mean() < 0.6 * every.mean()
         if found.mean() < 0.4 and glow:
             every = found  # (the text colour is still measured against the one background colour)
+        else:
+            # the background changes colour part of the way along (a dark tree behind the middle of a line over a
+            # blurred scene): there the one colour marks every pixel, the letters drown in one big shape and are
+            # neither measured nor erased. Those columns take the letters found against what is around them
+            rows = every[y0 - ey0 + h // 4 : y1 - ey0 - h // 4]
+            if rows.size:
+                solid = cv2.blur(rows.mean(0, keepdims=True).astype(np.float32), (max(3, h // 2), 1))[0] > 0.7
+                # (a stretch of another background is broad and leaves most of the line as it was; bold letters on
+                # a tag fill their columns too, but all along the line)
+                runs = np.diff(np.concatenate([[0], solid.astype(np.int8), [0]]))
+                longest = (np.flatnonzero(runs == -1) - np.flatnonzero(runs == 1)).max(initial=0)
+                if longest >= 2 * h and solid.mean() <= 0.6:
+                    every[:, solid] = found[:, solid]
     if not plain:  # over a picture, a texture or the scene: no one background colour, look for strokes instead
         every, dist = _thin_strokes(frame[ey0:ey1, ex0:ex1], h, ink_kind)
         if strokes is not None:

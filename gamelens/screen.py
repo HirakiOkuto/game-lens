@@ -108,16 +108,20 @@ def place(line: Line, size: float) -> tuple[tuple[int, int, int, int], str]:
     drop-down), so its translation is centred there too; text hard against the right is right-aligned."""
     x, _, w, _ = line.box
     L, R = line.free_left, line.free_right
+    # how far the box reaches beside the original: only a little for long text (what more the translation needs
+    # is given by room_for, which knows its length), so a long title on a wide light picture does not get the
+    # whole picture. (Short labels keep their room: their translations are several times longer.)
+    cap = 10**6 if w < 120 else max(8, w // 2)
     cy = (line.glyph_y[0] + line.glyph_y[1]) / 2
     tall = int(max(1.9 * line.glyph_h, 1.6 * size))
     y0 = int(cy - tall / 2)
     margin = 4
     if min(L, R) >= max(8, 0.6 * line.glyph_h) and abs(L - R) <= max(8, 0.3 * max(L, R)):
-        half = w / 2 + min(L, R) - margin
+        half = w / 2 + min(L, R, cap) - margin
         return (int(x + w / 2 - half), y0, int(2 * half), tall), "center"
     if R < 0.5 * w and L > 3 * max(R, margin):
-        return (x - L + margin, y0, w + L - margin, tall), "right"
-    return (x, y0, w + max(0, R - margin), tall), "left"
+        return (x - min(L, cap) + margin, y0, w + min(L, cap) - margin, tall), "right"
+    return (x, y0, w + max(0, min(R, cap) - margin), tall), "left"
 
 
 def paragraphs(lines: list[dict]) -> list[list[dict]]:
@@ -165,11 +169,15 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
     if w >= need:
         return rect
     if look is not None and look.calm:  # on a panel or a button: stay on its own background...
-        calm = (look.box[0] - look.free_left, look.box[0] + look.box[2] + look.free_right)
+        # ...and move away from where it starts only over plain background that is really there (a status at a
+        # card's right edge with the card's empty middle on its left), not past an icon close beside it
+        left = look.free_left if align != "left" or look.free_left >= 3 * h else 0
+        right = look.free_right if align != "right" or look.free_right >= 3 * h else 0
+        calm = (look.box[0] - left, look.box[0] + look.box[2] + right)
         fitted = room_for(rect, align, text, size, frame_w, own, others, None, calm)
-        if fitted[2] >= 0.7 * min(need, max(3 * w, 220)):
+        if fitted[2] >= 0.7 * min(need, max(3 * w, 220)) or calm[1] - calm[0] > 6 * h:
             return fitted
-        # ...unless the font would shrink past reading there (a small tag): then it runs over the tag's edge
+        # ...unless it is a small tag and the font would shrink past reading there: then it runs over the tag's edge
     lo, hi = bounds if bounds else (0, frame_w)
     ox = own[0] + own[2] / 2 if own else x + w / 2
     for b in others:
@@ -179,14 +187,18 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
             lo = max(lo, b[0] + b[2] + 4)
         elif b[0] >= ox:
             hi = min(hi, b[0] - 4)
-    # a left-aligned label (a table's, a skill's name beside its icon) only grows to the right, a right-aligned one
-    # to the left: what is on the other side (an icon, the card's edge) is not known to be empty. Only a centred
-    # one moves sideways within its panel
-    if align == "left":
-        lo = x
-    elif align == "right":
-        hi = x + w
-    new = min(need, max(3 * w, 220), hi - lo)
+    # (inside `bounds` the background is known to be plain.) Elsewhere a left-aligned label (a table's) only
+    # grows to the right, a right-aligned one to the left: what is on the other side is not known to be empty
+    if bounds is None:
+        if align == "left":
+            lo = x
+        elif align == "right":
+            hi = x + w
+    most = max(3 * w, 220)
+    if w >= 120:
+        # long text already (a banner's title, a heading): what it stands on ends somewhere near; smaller instead
+        most = (1.3 if look is not None and not look.calm else 1.6) * w
+    new = min(need, most, hi - lo)
     if new <= w:
         return rect
     nx = x + (w - new) // 2 if align == "center" else x - (new - w) if align == "right" else x
@@ -210,7 +222,9 @@ def place_block(looks: list[Line], size: float) -> tuple[tuple[int, int, int, in
         half = (x1 - x0) / 2 + max(0, min(widest.free_left, widest.free_right) - 4)
         mid = sum(mids) / len(mids)
         return (int(mid - half), y, int(2 * half), tall), "center"
-    return (x0, y, (x1 - x0) + max(0, widest.free_right - 4), tall), "left"
+    # (the game wrapped the lines at its panel's width: a little more room at most, not the plain background
+    # that may go on beyond the panel)
+    return (x0, y, (x1 - x0) + max(0, min(widest.free_right - 4, round(0.08 * (x1 - x0)))), tall), "left"
 
 
 def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict[str, str], font_scale: float,
@@ -242,6 +256,11 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
         size = max(11.0, gh * SIZE_FACTOR * font_scale)
         a = looks[0]
         t = tilted.get(id(own))
+        if t is None and len(looks) == 1 and own[3] > 2.5 * own[2] and own[3] >= 60:
+            # set top to bottom (a label down a screen's edge): along it, turned a quarter
+            t = {"tilt": 90.0, "tw": own[3], "th": own[2]}
+            gh = min(gh, round(0.8 * own[2]))
+            size = max(11.0, gh * SIZE_FACTOR * font_scale)
         if t:
             # along the original's own slant, around its middle; as long as the original or the translation needs
             cx, cy = own[0] + own[2] / 2, own[1] + own[3] / 2
@@ -273,9 +292,10 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
 
 
 def next_to(own, others, gap: int) -> bool:
-    """Another line of the same row starts right after this one (within `gap` and a few pixels)."""
+    """Another line of the same row starts soon after this one (within `gap` and about three letters): then this
+    one is not text set against the right edge of its panel."""
     x, y, w, h = own
-    return any(b is not own and b[0] >= x + w - 2 and b[0] - (x + w) <= gap + 12 and
+    return any(b is not own and b[0] >= x + w - 2 and b[0] - (x + w) <= gap + 3 * h and
                min(y + h, b[1] + b[3]) - max(y, b[1]) > 0.5 * min(h, b[3]) for b in others)
 
 

@@ -865,6 +865,8 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001 - a worker must always report back
             log.warning("region %s read: %s", r.id, e) if isinstance(e, LensError) else log.exception("region %s read", r.id)
             got = {"error": str(e) if isinstance(e, LensError) else f"{type(e).__name__}: {e}"}
+        if got and r.kind == "name" and len(plain_text(got.get("text", ""))) > 12:
+            got = None  # a speaker's name is short: this is other text passing through the name box (a key hint)
         self.bridge.region_read.emit(r.id, wt, (r, px, crop, got))
 
     def on_region_read(self, rid: str, wt: TextFollower, data):
@@ -923,6 +925,8 @@ class Controller(QObject):
 
     def on_region_done(self, rid: str, which, payload: dict):
         wt, (seq, line), got = which
+        if self.screen_ref is not None and (self.screen_menu or self.screen_count >= 8):
+            return  # a menu is (being) translated as a whole: a region's piece of it would be drawn over it
         if wt is not self.watchers.get(rid) or line != wt.line:
             return  # the text was replaced while it was being translated
         if wt.in_doubt:

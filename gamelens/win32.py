@@ -164,9 +164,10 @@ def english_layout() -> int | None:
     return next((int(h) for h in arr[:n] if h and int(h) & 0x3FF == LANG_ENGLISH), None)
 
 
-def ask_layout(hwnd: int, hkl: int):
-    """Ask the window to type with this layout (what the language bar does when you pick one)."""
-    user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
+def ask_layout(hwnd: int, hkl: int) -> bool:
+    """Ask the window to type with this layout (what the language bar does when you pick one). False when Windows
+    does not let the message through: a game running as administrator takes no messages from a normal program."""
+    return bool(user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl))
 
 
 def foreground() -> int:

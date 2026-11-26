@@ -493,8 +493,12 @@ class Controller(QObject):
         if win32.keyboard_layout(self.hwnd) & 0x3FF == win32.LANG_ENGLISH:
             return
         hkl = win32.english_layout()
+        if hkl and not win32.ask_layout(self.hwnd, hkl):
+            self.next_keys = now + 3600  # the game runs as administrator: Windows keeps us out
+            self.toast("สลับแป้นพิมพ์ให้ไม่ได้ เพราะเกมเปิดแบบผู้ดูแลระบบ — เปิด game-lens แบบผู้ดูแลระบบด้วย", 6)
+            log.info("keyboard: the game's window takes no messages from game-lens (it runs elevated)")
+            return
         if hkl:
-            win32.ask_layout(self.hwnd, hkl)
             if not self.keys_told:
                 self.keys_told = True
                 self.toast("สลับแป้นพิมพ์เป็นภาษาอังกฤษให้แล้ว (ปิดได้ในหน้าต่าง game-lens)", 3)

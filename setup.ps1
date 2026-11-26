@@ -28,7 +28,7 @@ Step "3/4 llama (ตัวรันโมเดลแปลในเครื่
 if (Get-Command llama -ErrorAction SilentlyContinue) {
     Write-Host "พบแล้ว"
 } else {
-    Write-Host "ยังไม่มีคำสั่ง llama — ถ้าจะใช้โมเดลแปลในเครื่อง (Hy-MT2) ให้ติดตั้ง Llama for Windows" -ForegroundColor Yellow
+    Write-Host "ยังไม่มีคำสั่ง llama — ถ้าจะใช้โมเดลแปลภาษาในเครื่อง ให้ติดตั้ง Llama for Windows" -ForegroundColor Yellow
     Write-Host "  ดาวน์โหลด .msixbundle ล่าสุดจาก $LlamaUrl แล้วดับเบิลคลิกติดตั้ง"
     Write-Host "  (ไม่ติดตั้งก็ได้ ถ้าจะใช้ Google / DeepL / Azure แทน)"
 }

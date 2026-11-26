@@ -1,5 +1,6 @@
 r"""Build the portable game-lens: one folder (and a zip of it) that runs on a computer with nothing installed.
-Unzip, double-click game-lens.exe. The translation model (4.6 GB) is downloaded by the app the first time.
+Unzip, double-click game-lens.exe. The text reader's models (~87 MB) and the translation model (1.1-5.8 GB, by
+graphics card) are downloaded by the app the first time.
 
     .venv\Scripts\python.exe tools\build_portable.py --llama path\to\llama-bXXXX-bin-win-vulkan-x64.zip
 
@@ -164,7 +165,7 @@ def build_launcher(icon: Path | None) -> None:
 
 def readme() -> None:
     (OUT / "อ่านก่อน.txt").write_text(
-        "game-lens (portable) — แปลข้อความในเกมเป็นภาษาไทย แสดงทับบนหน้าจอเกม\r\n\r\n"
+        "game-lens (portable) — แปลข้อความในเกมเป็นภาษาไทยหรืออังกฤษ แสดงทับบนหน้าจอเกม\r\n\r\n"
         "1. แตกไฟล์ zip ไว้ในโฟลเดอร์ที่เขียนไฟล์ได้ เช่น D:\\game-lens (ไม่ควรไว้ใน Program Files)\r\n"
         "2. ดับเบิลคลิก game-lens.exe\r\n"
         "   หาก Windows แสดง 'Windows protected your PC' ให้กด More info แล้วกด Run anyway (โปรแกรมไม่ได้ลงลายเซ็นดิจิทัล)\r\n"
@@ -172,6 +173,7 @@ def readme() -> None:
         "   โดยแสดงความคืบหน้าในหน้าต่าง game-lens\r\n"
         "3. ตั้งเกมเป็นแบบ Borderless หรือ Windowed แล้วดำเนินการตาม 3 ขั้นตอนในหน้าต่าง game-lens\r\n\r\n"
         "หน้าต่างของโปรแกรมเปลี่ยนเป็นภาษาไทยได้ที่มุมขวาบน (🌐)\r\n"
+        "แก้คำแปลที่ผิดได้เอง: กด F7 แล้วกด ✎ ท้ายคำแปล • เมนูหน้าใดไม่ถูกแปล กด F9\r\n"
         "รายละเอียดทั้งหมดอยู่ใน README.md\r\n", encoding="utf-8")
 
 

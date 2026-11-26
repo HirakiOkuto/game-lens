@@ -1390,11 +1390,12 @@ def load_fonts():
 
 
 RISK_TEXT = (
-    "<b>ก่อนใช้ game-lens</b><ul>"
-    "<li>game-lens ไม่ใช่โปรแกรมของผู้พัฒนาเกมใด และไม่เกี่ยวข้องกับผู้พัฒนาเกม</li>"
-    "<li>โปรแกรมไม่แก้ไฟล์เกม ไม่อ่านหน่วยความจำ และไม่ฉีดโค้ดเข้าเกม แต่วางหน้าต่างคำแปลทับหน้าต่างเกม "
-    "ระบบกันโกงบางระบบอาจมองหน้าต่างแบบนี้ว่าเป็นโปรแกรมภายนอก และข้อตกลงการใช้งานของบางเกมห้ามใช้โปรแกรมภายนอก</li>"
-    "<li>ไม่มีการรับประกันว่าบัญชีเกมจะปลอดภัย ผู้ใช้รับความเสี่ยงเอง ควรอ่านข้อตกลงการใช้งานของเกมก่อนใช้</li></ul>"
+    "<b>ข้อควรทราบก่อนใช้งาน game-lens</b><ul>"
+    "<li>game-lens มิใช่โปรแกรมของผู้พัฒนาเกมใด และไม่มีความเกี่ยวข้องกับผู้พัฒนาหรือผู้จัดจำหน่ายเกม</li>"
+    "<li>โปรแกรมไม่แก้ไขไฟล์ของเกม ไม่อ่านหน่วยความจำของเกม และไม่แทรกโค้ดเข้าสู่เกม แต่วางหน้าต่างคำแปลทับหน้าต่างเกม "
+    "ระบบป้องกันการโกงบางระบบอาจจัดหน้าต่างลักษณะนี้เป็นโปรแกรมภายนอก และข้อตกลงการใช้งานของเกมบางเกมห้ามใช้โปรแกรมภายนอก</li>"
+    "<li>ไม่มีการรับประกันความปลอดภัยของบัญชีเกม ผู้ใช้เป็นผู้รับความเสี่ยงจากการใช้งานเอง "
+    "ผู้ใช้ควรศึกษาข้อตกลงการใช้งานของเกมก่อนใช้งาน</li></ul>"
     "<b>Before you use game-lens</b><ul>"
     "<li>game-lens is not made by, or connected with, any game's developer.</li>"
     "<li>It does not change game files, read the game's memory or inject code into the game, but it does put a window "
@@ -1414,8 +1415,8 @@ def accept_risk() -> bool:
     box.setIcon(QMessageBox.Icon.Warning)
     box.setTextFormat(Qt.TextFormat.RichText)
     box.setText(RISK_TEXT)
-    ok = box.addButton("เข้าใจแล้ว ใช้ต่อ / I understand", QMessageBox.ButtonRole.AcceptRole)
-    box.addButton("ออก / Quit", QMessageBox.ButtonRole.RejectRole)
+    ok = box.addButton("รับทราบและใช้งานต่อ / I understand", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("ปิดโปรแกรม / Quit", QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(ok)
     box.exec()
     if box.clickedButton() is not ok:

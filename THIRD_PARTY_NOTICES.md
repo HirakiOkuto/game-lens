@@ -1,6 +1,6 @@
 # Third-party software in game-lens
 
-game-lens ใช้ซอฟต์แวร์และไฟล์ของผู้อื่นตามรายการด้านล่าง แต่ละรายการอยู่ภายใต้สัญญาอนุญาต (license) ของตัวเอง
+game-lens ใช้ซอฟต์แวร์และไฟล์ของบุคคลอื่นตามรายการด้านล่าง ซึ่งแต่ละรายการอยู่ภายใต้สัญญาอนุญาต (license) ของตนเอง
 game-lens uses the software and files below, each under its own license.
 
 game-lens itself: Copyright (C) 2026 the game-lens authors, licensed under the GNU General Public License v3.0 or

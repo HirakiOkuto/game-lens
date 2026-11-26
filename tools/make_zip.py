@@ -42,7 +42,7 @@ def main():
         if not PERSONAL:
             dst.writestr("game-lens/" + MARKER, MARKER_TEXT)
         dst.writestr("game-lens/models/วางไฟล์โมเดล .gguf ไว้ที่นี่.txt",
-                     "game-lens ดาวน์โหลดโมเดลแปลภาษามาไว้ที่นี่เองเมื่อเปิดใช้ครั้งแรก\r\n".encode("utf-8"))
+                     "game-lens จะดาวน์โหลดโมเดลแปลภาษามาจัดเก็บไว้ในโฟลเดอร์นี้โดยอัตโนมัติเมื่อเปิดใช้งานครั้งแรก\r\n".encode("utf-8"))
     names = zipfile.ZipFile(out).namelist()
     bad = [n for n in names if any(k in n for k in ("token", "keys.json", ".sqlite", ".venv/", "logs/"))]
     assert not bad, bad

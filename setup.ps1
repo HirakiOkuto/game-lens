@@ -12,30 +12,30 @@ $ok = $false
 try { & py -3.14 -c "import sys" 2>$null; $ok = ($LASTEXITCODE -eq 0) } catch { }
 if (-not $ok) {
     Write-Host "ไม่พบ Python 3.14" -ForegroundColor Yellow
-    Write-Host "ติดตั้งจาก https://www.python.org/downloads/ (เลือก 3.14) หรือพิมพ์:  winget install Python.Python.3.14"
-    Write-Host "แล้วรัน setup.bat อีกครั้ง"
+    Write-Host "กรุณาติดตั้งจาก https://www.python.org/downloads/ (เลือกรุ่น 3.14) หรือใช้คำสั่ง:  winget install Python.Python.3.14"
+    Write-Host "จากนั้นเรียกใช้ setup.bat อีกครั้ง"
     exit 1
 }
-Write-Host "พบแล้ว"
+Write-Host "พบ Python 3.14"
 
-Step "2/4 ติดตั้งส่วนประกอบของโปรแกรม (ครั้งแรกใช้เวลาหลายนาที)"
+Step "2/4 ติดตั้งส่วนประกอบของโปรแกรม (การติดตั้งครั้งแรกอาจใช้เวลาหลายนาที)"
 if (-not (Test-Path ".venv\Scripts\python.exe")) { & py -3.14 -m venv .venv }
 & .venv\Scripts\python.exe -m pip install --disable-pip-version-check -q --upgrade pip
 & .venv\Scripts\python.exe -m pip install --disable-pip-version-check -r requirements.txt
-if ($LASTEXITCODE -ne 0) { Write-Host "ติดตั้งไม่สำเร็จ ดูข้อความด้านบน" -ForegroundColor Red; exit 1 }
+if ($LASTEXITCODE -ne 0) { Write-Host "การติดตั้งไม่สำเร็จ กรุณาตรวจสอบข้อความด้านบน" -ForegroundColor Red; exit 1 }
 
-Step "3/4 llama (ตัวรันโมเดลแปลในเครื่อง)"
+Step "3/4 llama (โปรแกรมสำหรับเรียกใช้โมเดลแปลภาษาในเครื่อง)"
 if (Get-Command llama -ErrorAction SilentlyContinue) {
-    Write-Host "พบแล้ว"
+    Write-Host "พบคำสั่ง llama"
 } else {
-    Write-Host "ยังไม่มีคำสั่ง llama — ถ้าจะใช้โมเดลแปลภาษาในเครื่อง ให้ติดตั้ง Llama for Windows" -ForegroundColor Yellow
-    Write-Host "  ดาวน์โหลด .msixbundle ล่าสุดจาก $LlamaUrl แล้วดับเบิลคลิกติดตั้ง"
-    Write-Host "  (ไม่ติดตั้งก็ได้ ถ้าจะใช้ Google / DeepL / Azure แทน)"
+    Write-Host "ไม่พบคำสั่ง llama — หากต้องการใช้โมเดลแปลภาษาในเครื่อง กรุณาติดตั้ง Llama for Windows" -ForegroundColor Yellow
+    Write-Host "  โดยดาวน์โหลดไฟล์ .msixbundle รุ่นล่าสุดจาก $LlamaUrl แล้วดับเบิลคลิกเพื่อติดตั้ง"
+    Write-Host "  (ไม่จำเป็นต้องติดตั้ง หากใช้ระบบแปลภาษาออนไลน์ เช่น DeepL หรือ Azure)"
 }
 
 Step "4/4 โมเดล"
-Write-Host "game-lens ดาวน์โหลดเองเมื่อเปิดใช้ครั้งแรก: ตัวอ่านข้อความ (~87 MB) และโมเดลแปลภาษา"
-Write-Host "Index-Translate 9B (5.8 GB) หากการ์ดจอมี 10 GB ขึ้นไป หรือ Hy-MT2 1.8B (1.1 GB)"
+Write-Host "game-lens จะดาวน์โหลดไฟล์ต่อไปนี้โดยอัตโนมัติเมื่อเปิดใช้งานครั้งแรก: ระบบอ่านข้อความ (ประมาณ 87 MB) และโมเดลแปลภาษา"
+Write-Host "Index-Translate 9B (5.8 GB) สำหรับการ์ดแสดงผลที่มีหน่วยความจำ 10 GB ขึ้นไป หรือ Hy-MT2 1.8B (1.1 GB)"
 
 Write-Host ""
-Write-Host "ติดตั้งเสร็จ — เปิดโปรแกรมด้วย start.bat แล้วกดปุ่ม 'สร้างไอคอนบน Desktop'" -ForegroundColor Green
+Write-Host "การติดตั้งเสร็จสมบูรณ์ — เปิดโปรแกรมด้วย start.bat แล้วคลิกปุ่ม 'สร้างไอคอนบนเดสก์ท็อป'" -ForegroundColor Green

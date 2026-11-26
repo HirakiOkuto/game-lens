@@ -89,12 +89,13 @@ def create_shortcut(folder: str | None = None) -> str:
     ico = ROOT / "logs" / "game-lens-icon.ico"  # (a new file name makes Windows drop a cached old picture)
     ico.parent.mkdir(exist_ok=True)
     app_icon().pixmap(64, 64).save(str(ico), "ICO")
-    pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    exe = ROOT / "game-lens.exe"  # the portable build's launcher
+    target, args = (exe, "") if exe.exists() else (ROOT / ".venv" / "Scripts" / "pythonw.exe", "-m gamelens")
     where = f"'{folder}'" if folder else "[Environment]::GetFolderPath('Desktop')"
     ps = (
         f"$d={where};"
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut(\"$d\\game-lens.lnk\");"
-        f"$s.TargetPath='{pyw}';$s.Arguments='-m gamelens';$s.WorkingDirectory='{ROOT}';"
+        f"$s.TargetPath='{target}';$s.Arguments='{args}';$s.WorkingDirectory='{ROOT}';"
         f"$s.IconLocation='{ico}';$s.Description='game-lens';$s.Save()"
     )
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,

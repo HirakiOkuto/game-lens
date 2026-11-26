@@ -3,7 +3,9 @@ windows. Only processes started here are stopped on exit."""
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -20,6 +22,9 @@ MODELS = {
                      "--jinja", "--alias", "gemma26b"]),
 }
 MODEL_NAMES = {"hymt": "Hy-MT2 7B", "local": "Gemma 26B"}
+# downloaded by itself into the models folder when it is not there
+MODEL_FILES = {"hymt": ("Hy-MT2-7B-Q4_K_M.gguf",
+                        "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf")}
 
 
 def port_up(port: int, path: str = "/health") -> bool:
@@ -47,17 +52,63 @@ class ServerManager:
     def model_up(self, engine: str) -> bool:
         return engine in MODELS and port_up(MODELS[engine][0])
 
+    def python(self) -> Path:
+        """The interpreter for the server: the one running game-lens (its .venv, or the portable build's own)."""
+        exe = Path(sys.executable)
+        console = exe.with_name("python.exe")
+        if console.exists():
+            return console
+        return self.root / ".venv" / "Scripts" / "python.exe"
+
+    def llama(self) -> str | None:
+        """llama.cpp: the portable build's own copy, or one installed on this computer."""
+        own = self.root / "llama" / "llama.exe"
+        return str(own) if own.exists() else shutil.which("llama")
+
     def check(self, engine: str = "") -> list[str]:
         """Problems that would stop the setup from starting at all."""
         problems = []
         if not (self.root / "server" / "app.py").exists():
             problems.append(f"ไม่พบ server ของ game-lens ที่ {self.root / 'server'}")
-        elif not (self.root / ".venv" / "Scripts" / "python.exe").exists():
+        elif not self.python().exists():
             problems.append("game-lens ยังไม่ได้ติดตั้ง (.venv)")
-        if engine == "hymt" and not self.model_up("hymt") and not (self.models / "Hy-MT2-7B-Q4_K_M.gguf").exists():
-            problems.append(f"ไม่พบไฟล์โมเดล {self.models / 'Hy-MT2-7B-Q4_K_M.gguf'} — เลือกเครื่องแปลอื่น "
-                            "หรือแก้ models_dir ใน settings.json")
+        if engine in MODELS and not self.model_up(engine) and not self.llama():
+            problems.append("ไม่พบโปรแกรม llama สำหรับโมเดลในเครื่อง — ติดตั้ง Llama for Windows หรือเลือกเครื่องแปลออนไลน์")
         return problems
+
+    def download_model(self, engine: str, say) -> bool:
+        """Fetch the engine's model file if it is missing (resumes a broken download). say(text) reports progress."""
+        if engine not in MODEL_FILES:
+            return True
+        name, url = MODEL_FILES[engine]
+        dest = self.models / name
+        if dest.exists():
+            return True
+        part = dest.with_name(name + ".part")
+        try:
+            self.models.mkdir(parents=True, exist_ok=True)
+            have = part.stat().st_size if part.exists() else 0
+            headers = {"Range": f"bytes={have}-"} if have else {}
+            with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=60) as r:
+                if r.status_code == 200:
+                    have = 0  # the server sends it all again
+                elif r.status_code != 206:
+                    raise RuntimeError(f"HTTP {r.status_code}")
+                total = have + int(r.headers.get("content-length", 0))
+                shown = -1
+                with open(part, "ab" if have else "wb") as f:
+                    for chunk in r.iter_bytes(1 << 20):
+                        f.write(chunk)
+                        have += len(chunk)
+                        pct = int(100 * have / total) if total else 0
+                        if pct != shown:
+                            shown = pct
+                            say(f"กำลังดาวน์โหลดโมเดลแปล {pct}% ({have / 1e9:.1f} / {total / 1e9:.1f} GB) ครั้งแรกครั้งเดียว")
+            part.replace(dest)
+            return True
+        except (httpx.HTTPError, OSError, RuntimeError) as e:
+            say(f"ดาวน์โหลดโมเดลไม่สำเร็จ ({e}) — เปิด game-lens ใหม่เพื่อโหลดต่อ หรือเลือกเครื่องแปลออนไลน์")
+            return False
 
     # --- start / stop -----------------------------------------------------------------------------------------
     def _spawn(self, name: str, args: list[str], cwd: Path, env: dict | None = None) -> subprocess.Popen:
@@ -76,14 +127,15 @@ class ServerManager:
                 self.stop(other)
         port, args = MODELS[engine]
         args = [a.replace("{models}", self.models.as_posix()) for a in args]
-        self._spawn(engine, ["llama", "serve", *args], self.root)
+        self._spawn(engine, [self.llama() or "llama", "serve", *args], self.root)
 
     def start_server(self):
         if self.server_up():
             return
         env = dict(os.environ, LLM_URL="http://127.0.0.1:9940/v1", LLM_MODEL="gemma26b",
                    HYMT_URL="http://127.0.0.1:9943", PYTHONIOENCODING="utf-8")
-        py = self.root / ".venv" / "Scripts" / "python.exe"
+        env["PYTHONNOUSERSITE"] = "1"
+        py = self.python()
         self._spawn("server", [str(py), "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(SERVER_PORT)],
                     self.root / "server", env)
 
@@ -102,6 +154,9 @@ class ServerManager:
             if not self.server_up():
                 say("starting", "กำลังเปิดระบบแปล…")
                 self.start_server()
+            if engine in MODEL_FILES and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
+                say("error", self.detail)
+                return False
             if engine in MODELS and not self.model_up(engine):
                 say("starting", f"กำลังโหลด {MODEL_NAMES[engine]} (ครั้งแรกอาจใช้เวลาสักครู่)…")
                 self.start_model(engine)

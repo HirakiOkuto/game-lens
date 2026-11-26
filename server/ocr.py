@@ -306,11 +306,64 @@ def _script_chars(text: str, lang: str) -> int:
     return sum(c.isalpha() for c in text)
 
 
+def _read_new_boxes(img: np.ndarray, lang: str, engine, lines: list[dict], boxes, most: int, enlarge: float = 1.0,
+                    lone: bool = False, sure: float = 0.9, grow: bool = False) -> list[dict]:
+    """Of the boxes a second look found, those where no line is yet: read from the picture itself (enlarged by
+    `enlarge` first: small thin letters read better). Only readings in the language's own letters, read surely,
+    count (icons come out as stray marks). lone: a single letter may count too (遠 / 近 on round buttons) when it is
+    read all but certainly. grow: the box may have lost the end of the line to the scene behind it
+    (テンプレ|ート over bright grass): it is widened while the reading grows and stays as sure."""
+
+    def read(x, y, w, h):
+        crop = img[y:y + h, x:x + w]
+        if enlarge != 1.0:
+            crop = cv2.resize(crop, None, fx=enlarge, fy=enlarge, interpolation=cv2.INTER_CUBIC)
+        r = engine(crop, use_det=False, use_cls=False, use_rec=True)
+        return (r.txts[0].strip(), float(r.scores[0])) if r is not None and r.txts else ("", 0.0)
+
+    H, W = img.shape[:2]
+    found = []
+    for x0, y0, x1, y1 in boxes:
+        x0, y0, x1, y1 = max(0, int(x0)), max(0, int(y0)), min(W, int(np.ceil(x1))), min(H, int(np.ceil(y1)))
+        w, h = x1 - x0, y1 - y0
+        if h < 8 or w < (0.8 if lone else 1.5) * h:
+            continue
+        covered = max((max(0, min(x1, l["dbox"][0] + l["dbox"][2]) - max(x0, l["dbox"][0]))
+                       * max(0, min(y1, l["dbox"][1] + l["dbox"][3]) - max(y0, l["dbox"][1])) for l in lines), default=0)
+        if covered <= 0.2 * w * h:
+            found.append((x0, y0, w, h))
+    out: list[dict] = []
+    need = 2 if lang in NO_SPACE or lang == "ko" else 3
+    for x, y, w, h in sorted(found, key=lambda b: -b[3])[:most]:
+        text, conf = read(x, y, w, h)
+        while grow and text and x + w < W:
+            step = min(W - x - w, max(4, round(0.8 * h)))
+            t2, c2 = read(x, y, w + step, h)
+            if len(t2) <= len(text) or not t2.startswith(text[:-1]) or c2 < max(sure, conf - 0.05):
+                break
+            text, conf, w = t2, max(conf, c2), w + step
+        if conf < sure:
+            continue
+        n = _script_chars(text, lang)
+        if n >= need or (lone and n == 1 and len(text) == 1 and conf >= 0.98):
+            line = {"bbox": _tighten(img, [x, y, w, h], text), "dbox": [x, y, w, h],
+                    "text": fix_kana(text) if lang == "ja" else text, "conf": round(conf, 3)}
+            if not any(_overlap(line["dbox"], o["dbox"]) > 0.5 for o in out):  # (tiles overlap: found twice)
+                out.append(line)
+    return out
+
+
+def _overlap(a: list[int], b: list[int]) -> float:
+    """How much of the smaller of two boxes the other covers."""
+    iw = min(a[0] + a[2], b[0] + b[2]) - max(a[0], b[0])
+    ih = min(a[1] + a[3], b[1] + b[3]) - max(a[1], b[1])
+    return max(0, iw) * max(0, ih) / max(1, min(a[2] * a[3], b[2] * b[3]))
+
+
 def faint_lines(img: np.ndarray, lang: str, lines: list[dict], most: int = 16) -> list[dict]:
     """Lines of a whole screen that the detector missed: dim text on a panel of nearly its own colour (a tab that is
     not selected, grey on grey). The screen's contrast is raised piece by piece (CLAHE) and only the detector
-    looks again; what it finds where no line is gets read from the picture itself, and only readings in the
-    language's own letters, read surely, count (icons come out as stray marks)."""
+    looks again."""
     lang = normalize_lang(lang)
     engine = _get_rapid(*route(lang))
     lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
@@ -320,36 +373,50 @@ def faint_lines(img: np.ndarray, lang: str, lines: list[dict], most: int = 16) -
                  use_det=True, use_cls=False, use_rec=False)
     if res is None or res.boxes is None:
         return []
+    boxes = [(b[:, 0].min() - pad, b[:, 1].min() - pad, b[:, 0].max() - pad, b[:, 1].max() - pad) for b in res.boxes]
+    return _read_new_boxes(img, lang, engine, lines, boxes, most)
+
+
+def busy(img: np.ndarray) -> float:
+    """Share of a screen that is fine detail (the open world's grass and leaves; a menu's panels are plain)."""
+    g = cv2.cvtColor(cv2.resize(img, (480, 270), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    return float((np.abs(cv2.Laplacian(g, cv2.CV_32F)) > 12).mean())
+
+
+def scene_lines(img: np.ndarray, lang: str, lines: list[dict], most: int = 24) -> list[dict]:
+    """Lines over the moving world that the detector does not see at the picture's own size: small thin light
+    letters on bright grass (photo mode's 表情 / テンプレート / シーン score nothing at all). Colour is taken out
+    (the letters are grey, the grass is green and yellow), each half of the screen is looked at twice as big, and
+    what is found where no line is gets read from the picture, enlarged. About 0.8 s on the graphics card, so only
+    for a busy screen with little text found (see read_screen)."""
+    lang = normalize_lang(lang)
+    engine = _get_rapid(*route(lang))
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    s = hsv[..., 1].astype(np.float32) / 255
+    grey = cv2.cvtColor(np.clip(hsv[..., 2] * (1 - s) ** 2, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2RGB)
     H, W = img.shape[:2]
-    found = []
-    for box in res.boxes:
-        x0, y0 = max(0, int(box[:, 0].min()) - pad), max(0, int(box[:, 1].min()) - pad)
-        x1, y1 = min(W, int(np.ceil(box[:, 0].max())) - pad), min(H, int(np.ceil(box[:, 1].max())) - pad)
-        w, h = x1 - x0, y1 - y0
-        if h < 8 or w < 1.5 * h:
-            continue
-        covered = max((max(0, min(x1, l["dbox"][0] + l["dbox"][2]) - max(x0, l["dbox"][0]))
-                       * max(0, min(y1, l["dbox"][1] + l["dbox"][3]) - max(y0, l["dbox"][1])) for l in lines), default=0)
-        if covered <= 0.2 * w * h:
-            found.append((x0, y0, w, h))
-    out = []
-    for x, y, w, h in sorted(found, key=lambda b: -b[3])[:most]:
-        r = engine(img[y:y + h, x:x + w], use_det=False, use_cls=False, use_rec=True)
-        if r is None or not r.txts or float(r.scores[0]) < 0.9:
-            continue
-        text = r.txts[0].strip()
-        need = 2 if lang in NO_SPACE or lang == "ko" else 3
-        if _script_chars(text, lang) >= need:
-            out.append({"bbox": _tighten(img, [x, y, w, h], text), "dbox": [x, y, w, h],
-                        "text": fix_kana(text) if lang == "ja" else text, "conf": round(float(r.scores[0]), 3)})
-    return out
+    k, pad, over = 2.0, 32, 40
+    boxes = []
+    for x0, x1 in ((0, W // 2 + over), (W // 2 - over, W)):
+        big = cv2.resize(grey[:, x0:x1], None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC)
+        res = engine(np.pad(big, ((pad, pad), (pad, pad), (0, 0)), mode="edge"), use_det=True, use_cls=False, use_rec=False)
+        if res is not None and res.boxes is not None:
+            boxes += [((b[:, 0].min() - pad) / k + x0, (b[:, 1].min() - pad) / k, (b[:, 0].max() - pad) / k + x0,
+                       (b[:, 1].max() - pad) / k) for b in res.boxes]
+    return _read_new_boxes(img, lang, engine, lines, boxes, most, enlarge=2.0, lone=True, sure=0.8, grow=True)
 
 
-def read_screen(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> list[dict]:
-    """A whole screen: its lines, and the faint ones the detector misses at first."""
+SCENE_BUSY = 0.4  # busy(): menus 0.02-0.3, the open world 0.55
+
+
+def read_screen(img: np.ndarray, lang: str = "ja", min_score: float = 0.5, deep: bool = True) -> list[dict]:
+    """A whole screen: its lines, and the faint ones the detector misses at first. deep: over a busy scene where
+    little text was found, look for the small letters on it too (slow; a quick second look leaves it out)."""
     lines = read_lines(img, lang, min_score)
     if min(img.shape[:2]) >= 400:
         lines = _rows(lines + faint_lines(img, lang, lines))
+        if deep and len(lines) < 8 and busy(img) >= SCENE_BUSY:
+            lines = _rows(lines + scene_lines(img, lang, lines))
     return lines
 
 

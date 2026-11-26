@@ -109,7 +109,7 @@ def over_scene(crop: np.ndarray) -> bool:
 
 
 def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink_kind: str = "any",
-                 scene: bool | None = None) -> Line | None:
+                 scene: bool | None = None, _dense: bool = False) -> Line | None:
     """frame: BGR image; bbox: [x, y, w, h] of one horizontal text line. strokes: optional mask the size of the
     frame of where text strokes have been standing still (from the watcher): for text over a moving scene it
     tells the glyphs from thin bright details of the scene. ink_kind: light / dark when it is known which the
@@ -230,9 +230,15 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
             # And what is behind them is a picture: detail everywhere, not the flat fill of a button or a tag
             lap = np.abs(cv2.Laplacian(lum, cv2.CV_16S, ksize=3))
             behind = ~cv2.dilate(lt.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
-            textured = behind.any() and float((lap[behind] > 10).mean()) >= 0.58
-            if (textured and cols >= 0.5 and float(np.median(lum[lt])) >= 150 and lighter >= 35
-                    and lt[inside].mean() <= 0.4):
+            texture = float((lap[behind] > 10).mean()) if behind.any() else 0.0
+            # (_dense: the other ways found next to no letters. Then dense kanji, which fill the line's middle too,
+            # over a scene smooth in part - photo mode's 表情 / 詳細 over sand and sky - count as well, when the light
+            # found is in pieces no wider than a letter each, which a chip or a bar is not)
+            n_, _, st_, _ = cv2.connectedComponentsWithStats(lt.astype(np.uint8), connectivity=8)
+            apart = _dense and n_ > 2 and int(st_[1:, cv2.CC_STAT_WIDTH].max()) <= 1.2 * h
+            dense_ok = lt[inside].mean() <= 0.4 or (apart and lt[inside].mean() <= 0.7)
+            textured = texture >= 0.58 or (apart and texture >= 0.45)
+            if textured and cols >= 0.5 and float(np.median(lum[lt])) >= 150 and lighter >= 35 and dense_ok:
                 every, dist, on_scene, plain, spread = lt, rise, True, False, 99.0
                 bg = np.median(frame[ey0:ey1, ex0:ex1][~lt], 0)
     if not plain and not on_scene:  # over a picture, a texture or the scene: no one background colour, strokes
@@ -263,6 +269,12 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     if not ink.any() and every.mean() < 0.35:  # letters joined into one shape across the line: take everything
         ink, solid = every, np.ones(n, bool)  # (much more than a third of the area is not text at all)
     real = solid[labels] & ink
+    if scene is None and not on_scene and not _dense and real.sum() < 0.03 * w * h:
+        # next to nothing found of the letters (light kanji over sand: 表情 was neither erased nor measured, its
+        # translation took the water's blue): look once more for light letters on the scene, less strictly
+        again = analyze_line(frame, bbox, strokes, ink_kind, scene, _dense=True)
+        if again is not None and (again.mask > 0).sum() > 0:
+            return again
     rows, cols = np.flatnonzero(real.any(1)), np.flatnonzero(real.any(0))
     gy = (ey0 + int(rows[0]), ey0 + int(rows[-1]) + 1) if len(rows) >= 2 else (y0, y1)
     if on_scene and real.any():
@@ -298,6 +310,16 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     cover = ink
     if not plain and strokes is not None and every.mean() < 0.35:
         cover = every  # strokes that stood still are text, also where they run into a detail of the scene
+    if not plain and scene is None and len(cols) >= 2:
+        # over the scene the last letters can touch a blade of grass that runs out of the area, and are taken for the
+        # scene (テンプレー|ト was left standing): the reader's box says the text goes on, so in the letters' rows up
+        # to its end the strokes are erased too
+        bx1 = min(W, int(bbox[0]) + int(bbox[2]))
+        last = ex0 + int(cols[-1]) + 1
+        if bx1 - last > 0.5 * h:
+            tail = np.zeros(cover.shape, bool)
+            tail[max(0, gy[0] - ey0) : gy[1] - ey0, last - ex0 : bx1 - ex0] = True
+            cover = cover | (every & tail)
     mask = cv2.dilate(cover.astype(np.uint8) * 255, k)
     return Line(box=(x0, y0, w, h), fg=_hex(fg), bg=_hex(bg), plain=plain, calm=spread < 35, glyph_y=gy,
                 free_left=_free_run(frame, b0, b1, x0 - 3, -1) if x0 >= 4 else 0,

@@ -235,6 +235,21 @@ def test_analyze_line_small_tags():
     assert luminance(filled.fg) > 200 and luminance(filled.bg) < 170
 
 
+def test_analyze_line_light_labels_over_photo_mode_grass():
+    """Photo mode's labels: thin light letters straight on the moving world. Dense kanji over sand (表情) were neither
+    found nor measured - left standing, the translation in the water's blue; the end of テンプレート touches a blade of
+    grass that runs out of the line and was left standing."""
+    from gamelens.render import analyze_line, luminance
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "photo_labels.png"))  # from Azur Promilia's photo mode
+    face = analyze_line(img, [47, 30, 34, 22])  # 表情
+    assert not face.plain and luminance(face.fg) > 170 and (face.mask > 0).sum() > 300
+    tpl = analyze_line(img, [20, 165, 96, 25])  # テンプレート
+    x0, y0, x1, y1 = tpl.mask_box
+    to = tpl.mask[:, 100 - x0 : 113 - x0]  # where ト is
+    assert (to > 0).sum() > 40
+
+
 def test_erase_lines_covers_only_the_glyphs():
     from gamelens.render import analyze_line, contrast_outline, erase_lines, outline_for
 

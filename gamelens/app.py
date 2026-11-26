@@ -1195,7 +1195,7 @@ class Controller(QObject):
     def job_recheck(self, frame: np.ndarray, gen: int):
         try:
             p = self.profile
-            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen", frame_h=frame.shape[0])
+            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen-look", frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], [], p.src_lang)
             new = [l["text"] for l in lines
                    if len(l["text"]) >= 2 and not any(similar(l["text"], t) >= 0.75 for t in self.screen_read)]

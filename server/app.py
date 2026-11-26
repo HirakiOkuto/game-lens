@@ -136,8 +136,10 @@ async def ocr_lines(
                 lines = read_name(img, src, lambda t: (match_term(t, terms) or (None,))[0], fold_name)
             elif kind == "dialog":
                 lines = read_dialog(img, src, align == "center", lambda t: not already_in(t, "en", "ja") or src != "ja")
-            elif kind == "screen":  # a whole screen (a menu): its faint text too
-                lines = read_screen(img, src, min_score)
+            elif kind in ("screen", "screen-look"):  # a whole screen (a menu): its faint text too
+                # (a look every few seconds at a screen already read leaves out the slow look for small text over
+                # the moving world: what the first read found of it is known already)
+                lines = read_screen(img, src, min_score, deep=kind == "screen")
             else:
                 lines = read_lines(img, src, min_score)
         for i, l in enumerate(lines):

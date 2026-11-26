@@ -426,6 +426,35 @@ def test_faint_lines_reads_only_new_boxes_in_the_languages_letters(monkeypatch):
     assert json.dumps(got)
 
 
+def test_read_screen_looks_closer_only_at_a_busy_scene_with_little_text(monkeypatch):
+    """The slow look for small letters on the moving world (photo mode) runs for a busy screen where little was found,
+    not for a menu, nor for the quick look every few seconds; a box that lost the end of its line is widened."""
+    import ocr
+
+    calls = []
+    monkeypatch.setattr(ocr, "read_lines", lambda img, lang, ms=0.5: [])
+    monkeypatch.setattr(ocr, "faint_lines", lambda img, lang, lines: [])
+    monkeypatch.setattr(ocr, "scene_lines", lambda img, lang, lines: calls.append(1) or [
+        {"bbox": [20, 735, 96, 25], "dbox": [20, 735, 96, 25], "text": "テンプレート", "conf": 0.95}])
+    rng = np.random.default_rng(1)
+    grass = rng.integers(0, 255, (1080, 1920, 3), dtype=np.uint8)  # detail everywhere
+    menu = np.full((1080, 1920, 3), 60, np.uint8)
+    assert ocr.busy(grass) >= ocr.SCENE_BUSY > ocr.busy(menu)
+    assert [l["text"] for l in ocr.read_screen(grass, "ja")] == ["テンプレート"] and calls == [1]
+    assert ocr.read_screen(grass, "ja", deep=False) == [] and ocr.read_screen(menu, "ja") == [] and calls == [1]
+
+    # widening: テンプレ (0.83) grows into テンプレー, テンプレート; one more step reads past the end and is less sure
+    class Res:
+        def __init__(self, t, s):
+            self.txts, self.scores = [t], [s]
+
+    reads = {61: ("テンプレ", 0.83), 81: ("テンプレー", 0.92), 101: ("テンプレート", 0.95), 121: ("テンプレートラ", 0.86)}
+    engine = lambda img, use_det=False, use_cls=False, use_rec=True: Res(*reads[round(img.shape[1] / 2)])  # noqa: E731
+    img = np.full((1080, 1920, 3), 90, np.uint8)
+    got = ocr._read_new_boxes(img, "ja", engine, [], [(15, 735, 76, 760)], 8, enlarge=2.0, lone=True, sure=0.8, grow=True)
+    assert [(l["text"], l["dbox"][2]) for l in got] == [("テンプレート", 101)]
+
+
 def test_translate_lines_answers_a_bare_glossary_name_without_an_engine(monkeypatch, tmp_path):
     app_mod, client, h = _client(monkeypatch, tmp_path)
     fake = FakeEngine([{"lines": [{"id": "d", "tl": "Laffey ง่วงแล้ว"}]}])

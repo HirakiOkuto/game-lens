@@ -177,6 +177,11 @@ def _tighten(img: np.ndarray, bbox: list[int]) -> list[int]:
     x0, x1 = max(0, cols[0] - 1), min(w, cols[-1] + 2)
     if (y1 - y0) < 0.3 * h:
         return bbox  # most likely an underline or a frame line, not the text: keep the detector's box
+    if w - (x1 - x0) > max(0.08 * w, 1.5 * h):
+        # much more cut off than the detector's padding: one threshold does not tell the letters from what is
+        # behind them (light text over the 3D scene: its coloured words and the end of the line were lost).
+        # The detector's own width stays; the height is still the letters'
+        x0, x1 = 0, w
     return [int(x + x0), int(y + y0), int(x1 - x0), int(y1 - y0)]
 
 

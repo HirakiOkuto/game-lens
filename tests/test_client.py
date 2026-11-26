@@ -1105,3 +1105,18 @@ def test_text_set_at_an_angle_is_drawn_at_that_angle_in_its_own_size():
     assert tilted.max_px < 0.9 * plain.max_px  # the tall box of the slanted line is not its letters' height
     cx = tilted.rect[0] + tilted.rect[2] / 2
     assert abs(cx - (box[0] + box[2] / 2)) <= 2 and tilted.align == "center"
+
+
+def test_light_text_over_the_scene_is_found_whole():
+    """A hint drawn straight over the 3D world (grass light and dark behind it, a coloured word, a key icon): all of
+    the line is found and erased, its letters measured light, its height the letters' (not the box's)."""
+    from gamelens.render import analyze_line, luminance
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "scene_hint.png"))  # from Azur Promilia, 1080p
+    a = analyze_line(img, [54, 17, 462, 33])  # を押して、キボのスキルを使って謎解きする
+    assert not a.plain and luminance(a.fg) > 200
+    assert a.glyph_h <= 26  # the letters are ~20 px: grass reaching through the box is not counted
+    cols = (a.mask > 0).any(0)
+    x0 = a.mask_box[0]
+    # letters are found from the first (the coloured 押して) to the last (謎解きする), not only in the middle
+    assert cols[90 - x0 : 140 - x0].any() and cols[470 - x0 : 510 - x0].any()

@@ -1031,7 +1031,7 @@ class Controller(QObject):
             if not lines:
                 self.bridge.screen_done.emit(gen, None if auto else [])
                 return
-            groups = paragraphs(lines)
+            groups = paragraphs(lines, frame)
             reqs = requests(groups, p.src_lang)
             if gen == self.screen_gen:
                 self.screen_count = len(reqs)

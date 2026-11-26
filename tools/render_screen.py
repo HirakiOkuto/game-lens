@@ -69,7 +69,7 @@ def main():
     else:
         ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
     lines = lines_to_translate(ocr["lines"], [], prof.src_lang)
-    groups = paragraphs(lines)
+    groups = paragraphs(lines, frame)
     res = api.translate_lines(requests(groups, prof.src_lang), series=prof.series, target=prof.target,
                               src_lang=prof.src_lang, engine=engine, allow_cloud=engine in REMOTE, context=[])
     sent = {l["id"] for l in lines}

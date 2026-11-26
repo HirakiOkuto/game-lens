@@ -338,8 +338,11 @@ def test_tighten_shrinks_padded_box_to_glyphs():
 
     img = np.full((60, 200, 3), (70, 140, 100), np.uint8)
     img[20:42, 30:120] = (255, 212, 121)  # "text" 22 px high inside a 60 px box
-    x, y, w, h = _tighten(img, [0, 0, 200, 60])
+    x, y, w, h = _tighten(img, [24, 0, 102, 60])  # the detector's padding: a few pixels each side
     assert 18 <= y <= 20 and 22 <= h <= 25 and 28 <= x <= 30 and 90 <= w <= 93
+    # much more cut off than any padding (one threshold lost part of the line over a busy picture): width kept
+    x, y, w, h = _tighten(img, [0, 0, 200, 60])
+    assert x == 0 and w == 200 and 22 <= h <= 25
     assert all(type(v) is int for v in (x, y, w, h))  # JSON-serialisable
     assert _tighten(img, [0, 0, 3, 3]) == [0, 0, 3, 3]
 

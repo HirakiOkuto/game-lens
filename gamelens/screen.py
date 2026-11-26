@@ -119,15 +119,28 @@ def place(line: Line, size: float) -> tuple[tuple[int, int, int, int], str]:
     if min(L, R) >= max(8, 0.6 * line.glyph_h) and abs(L - R) <= max(8, 0.3 * max(L, R)):
         half = w / 2 + min(L, R, cap) - margin
         return (int(x + w / 2 - half), y0, int(2 * half), tall), "center"
-    if R < 0.5 * w and L > 3 * max(R, margin):
+    if line.calm and R < 0.5 * w and L > 3 * max(R, margin):  # (over the scene the room measured means nothing)
         return (x - min(L, cap) + margin, y0, w + min(L, cap) - margin, tall), "right"
     return (x, y0, w + max(0, min(R, cap) - margin), tall), "left"
 
 
-def paragraphs(lines: list[dict]) -> list[list[dict]]:
+def paragraphs(lines: list[dict], frame: np.ndarray | None = None) -> list[list[dict]]:
     """Group lines that belong to one block of running text: stacked tightly (closer than rows of a list are),
     the same size, either starting at the same left edge or centred on the same middle, and the line above long
-    enough to have wrapped. Short labels stacked in a table or under an icon stay apart."""
+    enough to have wrapped. Short labels stacked in a table or under an icon stay apart. With the picture given,
+    lines of quite another colour stay apart too (a quest's yellow title over its white objective)."""
+    colour: dict[int, np.ndarray | None] = {}
+
+    def ink(l):
+        if id(l) not in colour:
+            a = analyze_line(frame, l["bbox"]) if frame is not None else None
+            colour[id(l)] = np.array([int(a.fg[i : i + 2], 16) for i in (1, 3, 5)]) if a else None
+        return colour[id(l)]
+
+    def same_ink(a, b):
+        ca, cb = ink(a), ink(b)
+        return ca is None or cb is None or int(np.abs(ca - cb).max()) <= 70
+
     groups: list[list[dict]] = []
     for l in sorted(lines, key=lambda l: (l["bbox"][1], l["bbox"][0])):
         x, y, w, h = l["bbox"]
@@ -139,7 +152,8 @@ def paragraphs(lines: list[dict]) -> list[list[dict]]:
             same_middle = abs((x + w / 2) - (g[0]["bbox"][0] + g[0]["bbox"][2] / 2)) <= 0.6 * h
             wrapped = len(plain_text(g[-1]["text"])) >= 8
             # (lines set tightly have boxes that overlap: the reader's boxes reach above and below the letters)
-            if -0.45 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped:
+            if (-0.45 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped
+                    and same_ink(g[-1], l)):
                 g.append(l)
                 break
         else:
@@ -313,7 +327,8 @@ def keep_apart(items: list[Item]):
                 oa, ob = a._boxes[0], b._boxes[0]
                 if oa[0] >= ob[0]:
                     continue  # a is the left one of the pair
-                same_row = min(ay + ah, by + bh) - max(ay, by) > 0.5 * min(ah, bh)
+                # (one row: the originals side by side, not merely translations tall enough to reach each other)
+                same_row = min(oa[1] + oa[3], ob[1] + ob[3]) - max(oa[1], ob[1]) > 0.5 * min(oa[3], ob[3])
                 if not same_row or ax + aw <= bx - 4:
                     continue
                 if bx - 6 - ax >= oa[2]:

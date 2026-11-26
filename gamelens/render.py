@@ -197,7 +197,29 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
                 longest = (np.flatnonzero(runs == -1) - np.flatnonzero(runs == 1)).max(initial=0)
                 if longest >= 2 * h and solid.mean() <= 0.6:
                     every[:, solid] = found[:, solid]
-    if not plain:  # over a picture, a texture or the scene: no one background colour, look for strokes instead
+    on_scene = False
+    if scene is None:
+        # light game text with its soft shadow straight over the 3D scene (a hint, a quest): the scene is light
+        # here and dark there, so no one colour and no one threshold finds the letters. Pixels brighter than what
+        # is around them, with their shadow close by, do
+        lt, rise = _light_on_scene(frame[ey0:ey1, ex0:ex1], h)
+        if 0.03 <= lt.mean() <= 0.3:
+            lum = cv2.cvtColor(frame[ey0:ey1, ex0:ex1], cv2.COLOR_BGR2GRAY)
+            inside = (slice(y0 - ey0 + h // 4, y1 - ey0 - h // 4), slice(x0 - ex0, x1 - ex0))
+            cols = lt[y0 - ey0 : y1 - ey0, x0 - ex0 : x1 - ex0].any(0).mean()
+            # (and they are light letters: much brighter than the line's area as a whole. Next to dark letters on a
+            # light chip it finds the chip itself, as bright as the rest of it)
+            lighter = float(np.median(lum[lt])) - float(np.median(lum))
+            # (letters are thin: the light found filling a third of the line is the tag between bold dark letters)
+            # And what is behind them is a picture: detail everywhere, not the flat fill of a button or a tag
+            lap = np.abs(cv2.Laplacian(lum, cv2.CV_16S, ksize=3))
+            behind = ~cv2.dilate(lt.astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
+            textured = behind.any() and float((lap[behind] > 10).mean()) >= 0.58
+            if (textured and cols >= 0.5 and float(np.median(lum[lt])) >= 150 and lighter >= 35
+                    and lt[inside].mean() <= 0.4):
+                every, dist, on_scene, plain, spread = lt, rise, True, False, 99.0
+                bg = np.median(frame[ey0:ey1, ex0:ex1][~lt], 0)
+    if not plain and not on_scene:  # over a picture, a texture or the scene: no one background colour, strokes
         every, dist = _thin_strokes(frame[ey0:ey1, ex0:ex1], h, ink_kind)
         if strokes is not None:
             still = cv2.dilate(strokes[ey0:ey1, ex0:ex1].astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
@@ -227,6 +249,16 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     real = solid[labels] & ink
     rows, cols = np.flatnonzero(real.any(1)), np.flatnonzero(real.any(0))
     gy = (ey0 + int(rows[0]), ey0 + int(rows[-1]) + 1) if len(rows) >= 2 else (y0, y1)
+    if on_scene and real.any():
+        # over the scene a blade of grass or a glint reaches above or below the letters: the letters are the rows
+        # most of the line's strokes cross
+        density = real.sum(1).astype(np.float32)
+        dense = np.flatnonzero(density >= 0.2 * float(density.max()))
+        if len(dense) >= 2:
+            gy = (ey0 + int(dense[0]), ey0 + int(dense[-1]) + 1)
+    # (letters are within the reader's box, give or take a pixel or two: more is a glow or the scene behind)
+    slack = max(1, round(0.06 * h))
+    gy = (max(gy[0], y0 - slack), min(gy[1], y1 + slack))
     if gy[1] - gy[0] < 0.35 * h:
         gy = (y0, y1)
     if len(cols) >= 2 and cols[-1] - cols[0] + 1 >= 0.25 * w:  # where the text really starts and ends (the given box
@@ -255,6 +287,24 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
                 free_left=_free_run(frame, b0, b1, x0 - 3, -1) if x0 >= 4 else 0,
                 free_right=_free_run(frame, b0, b1, x1 + 2, 1) if x1 + 3 < W else 0,
                 mask=mask, mask_box=(ex0, ey0, ex1, ey1))
+
+
+def _light_on_scene(area: np.ndarray, h: int) -> tuple[np.ndarray, np.ndarray]:
+    """Light letters over a busy picture: pixels clearly brighter than the picture around them (a median over about
+    one and a half letters), in shapes that have a much darker pixel close by (the letters' shadow). Returns the
+    mask and how much brighter each pixel is."""
+    lum = cv2.cvtColor(area, cv2.COLOR_BGR2GRAY)
+    k = max(3, int(1.6 * h)) | 1
+    rise = lum.astype(np.int16) - cv2.medianBlur(lum, min(k, 255)).astype(np.int16)
+    bright = (rise > max(25.0, 0.35 * float(np.percentile(rise, 99)))) & (lum > 140)
+    r = max(2, round(0.12 * h))
+    darkest = cv2.erode(lum, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    edge = (lum.astype(np.int16) - darkest.astype(np.int16)) > 70
+    n, labels = cv2.connectedComponents(bright.astype(np.uint8), connectivity=8)
+    keep = np.zeros(n, bool)
+    keep[np.unique(labels[bright & edge])] = True
+    keep[0] = False
+    return keep[labels], rise
 
 
 def learn_strokes(line: Line, frame: np.ndarray, need: int = 4) -> bool:

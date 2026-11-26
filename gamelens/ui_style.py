@@ -37,6 +37,8 @@ QListWidget::item:selected {{ background: {ACCENT}; color: white; border-radius:
 QSlider::groove:horizontal {{ height: 6px; background: #2a2f3a; border-radius: 3px; }}
 QSlider::handle:horizontal {{ background: {ACCENT}; width: 16px; margin: -6px 0; border-radius: 8px; }}
 QCheckBox::indicator {{ width: 16px; height: 16px; }}
+QCheckBox:disabled {{ color: #5d6470; }}
+QCheckBox::indicator:disabled {{ background: #2a2e37; border: 1px solid #3a3f4a; border-radius: 3px; }}
 QToolTip {{ background: #262a33; color: #e7e9ee; border: 1px solid #343a46; }}
 """
 

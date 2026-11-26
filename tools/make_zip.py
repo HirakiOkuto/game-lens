@@ -1,4 +1,4 @@
-"""Build a zip to give game-lens to someone else: what is committed, without tests, without anything of this
+r"""Build a zip to give game-lens to someone else: what is committed, without tests, without anything of this
 computer (keys, token, cache, logs, the Python environment). The model folder is the app's own `models/`.
 
     .venv\Scripts\python.exe tools\make_zip.py            -> dist\game-lens-<date>.zip

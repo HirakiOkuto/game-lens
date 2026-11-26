@@ -3,6 +3,9 @@
 game-lens ใช้ซอฟต์แวร์และไฟล์ของผู้อื่นตามรายการด้านล่าง แต่ละรายการอยู่ภายใต้สัญญาอนุญาต (license) ของตัวเอง
 game-lens uses the software and files below, each under its own license.
 
+game-lens itself: Copyright (C) 2026 the game-lens authors, licensed under the GNU General Public License v3.0 or
+later (`LICENSE`), with no warranty. The source of the launcher `game-lens.exe` is `licenses/game-lens.exe-source.cs`.
+
 game-lens is not made by, endorsed by or connected with the developer or publisher of any game it is used with.
 Game names in its profiles and glossaries only say which game a profile is for.
 

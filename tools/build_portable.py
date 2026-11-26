@@ -167,6 +167,9 @@ def build_launcher(icon: Path | None) -> None:
     csc = Path(r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe")
     src = ROOT / "build" / "launcher.cs"
     src.write_text(LAUNCHER, encoding="utf-8-sig")
+    # game-lens is GPL-3.0: the source of every program in the folder goes along, the launcher's too
+    (OUT / "licenses").mkdir(exist_ok=True)
+    (OUT / "licenses" / "game-lens.exe-source.cs").write_text(LAUNCHER, encoding="utf-8-sig")
     args = [str(csc), "/nologo", "/target:winexe", "/optimize", "/codepage:65001", "/r:System.Windows.Forms.dll",
             f"/out:{OUT / 'game-lens.exe'}", str(src)]
     if icon and icon.exists():

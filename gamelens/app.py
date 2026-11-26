@@ -571,8 +571,8 @@ class Controller(QObject):
                 self.overlay.clear(r.id)  # never leave an old translation over new text
                 self.overlay.set_pending(r.id, None)
             elif ev == "read":
-                if not self.health:
-                    wt.again()  # the server is still starting
+                if not self.health or self.services.state == "starting":
+                    wt.again()  # the server is still starting (or the model being downloaded / loaded)
                     wt.read_at = now + 0.5
                     if now - self.waiting_toast > 15:
                         self.waiting_toast = now

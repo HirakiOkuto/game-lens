@@ -406,7 +406,8 @@ class HyMtEngine:
             raise EngineError(f"Hy-MT unreachable at {self.url}: {e}") from e
         if r.status_code != 200:
             raise EngineError(f"Hy-MT HTTP {r.status_code}: {r.text[:200]}")
-        return (r.json()["choices"][0]["message"].get("content") or "").strip()
+        # a small model now and then splits a Thai letter between tokens: the broken byte comes back as U+FFFD
+        return (r.json()["choices"][0]["message"].get("content") or "").replace("\ufffd", "").strip()
 
     def _with_slots(self, text: str, history, used: list[tuple[str, str]], target: str, style: str) -> str:
         """Translate with N1, N2... standing in for the names, then put the names back. '' if a slot got lost."""

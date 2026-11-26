@@ -814,8 +814,12 @@ class Controller(QObject):
         if not auto:
             self.toast("กำลังแปลทั้งหน้าจอ… (F9 / Esc ปิด)", 2)
         # lines inside a region that is showing its own translation are left to that region
+        # ...but only while someone speaks (a short name in a name region): on a menu, the text that happens to lie
+        # in a region is part of the menu
+        speaking = any(r.kind == "name" and self.watchers[r.id].last_text and len(plain_text(self.watchers[r.id].last_text)) <= 10
+                       for r in self.profile.regions)
         skip = [region_px(r.rect, frame.shape) for r in self.profile.regions
-                if regions and (self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text)]
+                if regions and speaking and (self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text)]
         self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
 
     def auto_screen_tick(self, frame: np.ndarray, now: float):

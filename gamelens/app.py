@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -31,7 +31,7 @@ from .panel import Panel
 from .picker import GamePicker
 from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import (TextSize, begins, text_marks, text_state, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
+from .screen import (TextSize, begins, marks_unchanged, text_marks, text_state, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
@@ -227,11 +227,10 @@ class Controller(QObject):
 
         self.hotkeys = HotkeyFilter(self.on_hotkey)
         app.installNativeEventFilter(self.hotkeys)
-        hk = self.settings.hotkeys
-        hwnd = int(self.overlay.winId())
-        for hid, name in ((HK_TOGGLE, "toggle"), (HK_SCREEN, "screen"), (HK_REGIONS, "regions"), (HK_HISTORY, "history")):
-            if hk.get(name) and not win32.register_hotkey(hwnd, hid, hk[name]):
-                self.notify("game-lens", t("The key {key} is used by another program (change it in settings.json)", key=hk[name]))
+        self.key_before = None  # (name, key) while a new key is being tried
+        for name in self.register_hotkeys():
+            self.notify("game-lens", t("The key {key} is used by another program (change it under Keys in the game-lens "
+                                       "window)", key=self.settings.hotkeys[name]))
 
         self.timer = QTimer(self, interval=50, timeout=self.tick)
         self.timer.start()
@@ -243,6 +242,53 @@ class Controller(QObject):
         self.refresh_panel()
         if not (self.settings.start_hidden and self.setup_complete()):
             self.show_panel()
+
+    HOTKEY_IDS = ((HK_TOGGLE, "toggle"), (HK_SCREEN, "screen"), (HK_REGIONS, "regions"), (HK_HISTORY, "history"))
+
+    def register_hotkeys(self) -> list[str]:
+        """Register the shortcuts with Windows; the names of those another program holds already."""
+        hwnd, failed = int(self.overlay.winId()), []
+        for hid, name in self.HOTKEY_IDS:
+            win32.unregister_hotkey(hwnd, hid)
+            spec = self.settings.hotkeys.get(name)
+            try:
+                if spec and not win32.register_hotkey(hwnd, hid, spec):
+                    failed.append(name)
+            except ValueError:
+                failed.append(name)
+        return failed
+
+    def taking_key(self, on: bool):
+        """While a key is being chosen in the window the shortcuts are let go (or Windows would take the key)."""
+        if on:
+            hwnd = int(self.overlay.winId())
+            for hid, _ in self.HOTKEY_IDS:
+                win32.unregister_hotkey(hwnd, hid)
+            self.key_before = None
+            return
+        failed = self.register_hotkeys()
+        if self.key_before and self.key_before[0] in failed:
+            name, old = self.key_before
+            self.notify("game-lens", t("The key {key} is used by another program — kept {old}",
+                                       key=self.settings.hotkeys[name], old=old))
+            self.settings.hotkeys[name] = old
+            self.register_hotkeys()
+        self.key_before = None
+        self.settings.save()
+        self.panel.set_hotkeys(self.settings.hotkeys, self.settings.peek_key)
+
+    def set_hotkey(self, name: str, spec: str):
+        used = {n: s for n, s in {**self.settings.hotkeys, "peek": self.settings.peek_key}.items() if n != name}
+        if spec.upper() in {s.upper() for s in used.values()}:
+            self.notify("game-lens", t("{key} is already the key of something else", key=spec))
+            return
+        if name == "peek":
+            self.settings.peek_key = spec
+            self.peek_vk = win32.parse_hotkey(spec)[1]
+        else:
+            self.key_before = (name, self.settings.hotkeys.get(name, ""))
+            self.settings.hotkeys[name] = spec
+        log.info("key %s: %s", name, spec)
 
     # --- small helpers ----------------------------------------------------------------------------------------
     def setup_complete(self) -> bool:
@@ -272,6 +318,8 @@ class Controller(QObject):
         self.panel.src_lang_changed.connect(self.set_src_lang)
         self.panel.toasts_changed.connect(self.set_toasts)
         self.panel.english_keys_changed.connect(self.set_english_keys)
+        self.panel.hotkey_changed.connect(self.set_hotkey)
+        self.panel.taking_key.connect(self.taking_key)
         self.panel.show_history.connect(self.show_history)
         self.panel.make_shortcut.connect(self.make_shortcut)
         self.panel.quit_app.connect(self.quit)
@@ -567,7 +615,7 @@ class Controller(QObject):
         log.info("quitting")
         self.timer.stop()
         self.status_timer.stop()
-        for hid in (HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY):
+        for hid, _ in self.HOTKEY_IDS:
             win32.unregister_hotkey(int(self.overlay.winId()), hid)
         if self.cap:
             self.cap.stop()
@@ -990,7 +1038,12 @@ class Controller(QObject):
             return
         if not items:
             self.toast(t("No text on the screen"), 2)
+        kept = {(it.text, it.rect): it.born for it in self.overlay.items.get("screen", [])}
         self.overlay.set_items("screen", items)
+        for it in items:  # a translation that stayed up while the screen was read again does not fade in again
+            if (it.text, it.rect) in kept:
+                it.born = kept[(it.text, it.rect)]
+            it._marks = text_marks(self.screen_frame, getattr(it, "_boxes", []))
         for it in items:  # into the history too: a menu's translation can be corrected there
             if getattr(it, "_src", ""):
                 e = self.history.add("ui", it._src, it.text, self.screen_engine)
@@ -1021,17 +1074,43 @@ class Controller(QObject):
                 self.dismiss_screen()
                 self.auto_done = None
             elif state == "changed" or new_text:
+                self.drop_changed_items(frame)  # (a pop-up over them: at once, not after it has opened)
                 if last is None or stroke_change(last, strokes) > STILL:
                     return  # still moving (a pop-up opening): wait until it stands
-                # read the screen again; what is shown now may lie over other text, so it goes first
+                # read the screen again; the translations of text that is still there stay up meanwhile
                 auto, menu = self.screen_auto, self.screen_menu
-                self.dismiss_screen()
+                self.screen_gen += 1
+                self.screen_ref, self.screen_marks = None, []
                 self.screen_menu = menu
                 self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
             return
         now_map = ink_map(frame, "any")  # still being read: only a quite different screen counts
         if changed_pixels(self.screen_ref, now_map) > 0.25 * now_map.size:
             self.dismiss_screen()
+
+    def drop_changed_items(self, frame: np.ndarray):
+        """Take away the screen translations whose original text changed or is covered now (a pop-up, another tab),
+        and the part of the erasing patch under them; the others stay."""
+        items = self.overlay.items.get("screen", [])
+        keep = [it for it in items if marks_unchanged(frame, getattr(it, "_marks", []))]
+        if len(keep) == len(items):
+            return
+        holder = next((it for it in items if it.patch is not None), None)
+        if holder is not None:
+            patch = QImage(holder.patch)  # a copy
+            p = QPainter(patch)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            for it in items:
+                if it not in keep:
+                    for x, y, w, h in getattr(it, "_boxes", []):
+                        p.fillRect(int(x - holder.patch_pos[0]) - 4, int(y - holder.patch_pos[1]) - 4, int(w) + 8, int(h) + 8,
+                                   Qt.GlobalColor.transparent)
+            p.end()
+            holder.patch = None
+            if keep:
+                keep[0].patch, keep[0].patch_pos = patch, holder.patch_pos
+        self.overlay.items["screen"] = keep
+        self.overlay.update()
 
     def dismiss_screen(self):
         self.screen_ref, self.screen_marks, self.screen_menu = None, [], False

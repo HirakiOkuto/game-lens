@@ -62,15 +62,10 @@ def text_state(frame: np.ndarray, marks: list) -> str:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     gone, sentence = 0, False
     total = sum(n for _, _, n in marks)
-    for (x, y, w, h), edges, n in marks:
-        crop = gray[y : y + h, x : x + w]
-        if crop.shape != edges.shape:
-            continue
-        now = cv2.dilate((cv2.Canny(crop, 60, 160) > 0).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-        e = int(edges.sum())
-        if e and (edges & now).sum() < 0.6 * e:
-            gone += n
-            sentence = sentence or n >= 8
+    for mark in marks:
+        if _mark_gone(gray, mark):
+            gone += mark[2]
+            sentence = sentence or mark[2] >= 8
     if gone >= 0.6 * total:
         return "gone"
     return "changed" if sentence or gone >= 0.2 * total else "same"
@@ -78,6 +73,23 @@ def text_state(frame: np.ndarray, marks: list) -> str:
 
 def text_still_there(frame: np.ndarray, marks: list) -> bool:
     return text_state(frame, marks) == "same"
+
+
+def _mark_gone(gray: np.ndarray, mark) -> bool:
+    """Are the edges of the text in that box mostly gone (other text there now, or something over it)?"""
+    (x, y, w, h), edges, _ = mark
+    crop = gray[y : y + h, x : x + w]
+    if crop.shape != edges.shape:
+        return False
+    now = cv2.dilate((cv2.Canny(crop, 60, 160) > 0).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    e = int(edges.sum())
+    return bool(e) and (edges & now).sum() < 0.6 * e
+
+
+def marks_unchanged(frame: np.ndarray, marks: list) -> bool:
+    """Every box of one translation still shows the text that was translated (nothing new over it)."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    return not any(_mark_gone(gray, m) for m in marks)
 
 
 def common_heights(heights: list[int]) -> list[float]:

@@ -968,3 +968,40 @@ def test_menu_text_is_logged_once_and_items_know_their_line(tmp_path):
     groups = [[{"id": "a", "bbox": [38, 44, 56, 20], "text": "ラベル"}], [{"id": "b", "bbox": [38, 134, 56, 20], "text": "他"}]]
     items = screen_items(img, groups, {"b": "อื่น"}, 0.9)
     assert [it._id for it in items] == ["b"]
+
+
+def test_a_translation_goes_only_when_its_own_text_changed():
+    from gamelens.screen import marks_unchanged, text_marks
+
+    img = np.full((200, 400, 3), (225, 215, 205), np.uint8)
+    cv2.putText(img, "Label", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    cv2.putText(img, "Other", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    top, bottom = text_marks(img, [[38, 44, 60, 20]]), text_marks(img, [[38, 134, 60, 20]])
+    popup = img.copy()
+    cv2.rectangle(popup, (20, 120), (300, 190), (245, 245, 240), -1)  # a pop-up over the lower one
+    assert marks_unchanged(popup, top) and not marks_unchanged(popup, bottom)
+
+
+def test_a_key_button_takes_the_next_key():
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from gamelens.panel import KeyButton
+
+    QApplication.instance() or QApplication([])
+    got = []
+    b = KeyButton("screen", "F9")
+    b.changed.connect(lambda n, s: got.append((n, s)))
+    b.show()
+    b.click()
+    QTest.keyClick(b, Qt.Key.Key_Q)  # a letter alone: the game needs it
+    QTest.keyClick(b, Qt.Key.Key_Q, Qt.KeyboardModifier.ControlModifier)
+    peek = KeyButton("peek", "F8", plain=True)
+    peek.changed.connect(lambda n, s: got.append((n, s)))
+    peek.show()
+    peek.click()
+    QTest.keyClick(peek, Qt.Key.Key_F11, Qt.KeyboardModifier.AltModifier)  # held, read as one key
+    b.click()
+    QTest.keyClick(b, Qt.Key.Key_Escape)
+    assert got == [("screen", "Ctrl+Q"), ("peek", "F11")] and b.text() == "Ctrl+Q"

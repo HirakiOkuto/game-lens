@@ -52,6 +52,8 @@ TH = {
     "Test": "ทดสอบ",
     "Display": "การแสดงผล",
     "Text size": "ขนาดตัวอักษร",
+    "The font {name} is not on this computer (or has no letters of this language): {used} is used instead. Choose one from the list.": "ไม่พบแบบอักษร {name} ในเครื่องนี้ (หรือไม่มีตัวอักษรของภาษานี้) จึงใช้ {used} แทน เลือกแบบอักษรจากรายการได้",
+    "game-lens is still running — its 訳 icon is at the bottom right of the screen (under ^ if hidden). Click it to open the window; Quit in its menu closes it.": "game-lens ยังทำงานอยู่ — ไอคอน 訳 อยู่มุมขวาล่างของหน้าจอ (หากไม่เห็นให้กด ^) คลิกไอคอนเพื่อเปิดหน้าต่าง หรือคลิกขวาแล้วเลือก \"ปิดโปรแกรม\" เพื่อปิด",
     "A letter needs Ctrl or Alt (the game uses it)": "ตัวอักษรต้องกดคู่กับ Ctrl หรือ Alt (เกมใช้ปุ่มนี้)",
     "Click a key to change it": "คลิกที่ปุ่มเพื่อเปลี่ยน",
     "Click, then press the new key": "คลิก แล้วกดปุ่มใหม่",

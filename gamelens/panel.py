@@ -72,6 +72,14 @@ class Step(QWidget):
             self.button.show()
 
 
+def usable_font(family: str, target: str) -> str:
+    """The font to draw in: the chosen one if it is on this computer with the letters of the language translated into,
+    else the one that comes with game-lens, else Windows' own."""
+    ws = QFontDatabase.WritingSystem.Thai if target == "th" else QFontDatabase.WritingSystem.Latin
+    have = set(QFontDatabase.families(ws))
+    return next((f for f in (family, "Bai Jamjuree", "Leelawadee UI", "Tahoma") if f in have), family)
+
+
 # keys a shortcut can be: Qt key -> the name win32.parse_hotkey knows
 KEY_NAMES = {**{getattr(Qt.Key, f"Key_F{i}"): f"F{i}" for i in range(1, 13)},
              **{getattr(Qt.Key, f"Key_{c}"): c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"},
@@ -157,6 +165,7 @@ class Panel(QWidget):
     english_keys_changed = Signal(bool)
     hotkey_changed = Signal(str, str)
     taking_key = Signal(bool)
+    closed = Signal()  # the window was closed (game-lens keeps running in the tray)
     ui_lang_changed = Signal(str)
     auto_screen_changed = Signal(bool)
     show_history = Signal()
@@ -313,8 +322,15 @@ class Panel(QWidget):
         self.family = QFontComboBox()
         self.family.setToolTip(t("The font of the translations drawn over the game (only fonts that have the letters "
                                  "of the language translated into are listed)"))
-        self.family.currentFontChanged.connect(lambda f: (self._preview(), self.font_family_changed.emit(f.family())))
+        self.family.currentFontChanged.connect(lambda f: (self._preview(), self.font_note.hide(),
+                                                          self.font_family_changed.emit(f.family())))
         g.addWidget(self.family, 1, 1, 1, 2)
+        self.font_note = QLabel("")
+        self.font_note.setObjectName("muted")
+        self.font_note.setStyleSheet(f"color: {WARN};")
+        self.font_note.setWordWrap(True)
+        self.font_note.hide()
+        g.addWidget(self.font_note, 3, 0, 1, 3)
         # what the translations look like in that font and size, without going to the game
         self.sample = QLabel("")
         self.sample.setWordWrap(True)
@@ -480,6 +496,16 @@ class Panel(QWidget):
             self.family.blockSignals(True)
             self.family.setCurrentFont(QFont(font_family))
             self.family.blockSignals(False)
+            # not on this computer (or without the letters of the language): the list cannot show it; say so
+            missing = font_family not in QFontDatabase.families(self.family.writingSystem())
+            self.font_note.setText(t("The font {name} is not on this computer (or has no letters of this language): "
+                                     "{used} is used instead. Choose one from the list.", name=font_family,
+                                     used=usable_font(font_family, target)) if missing else "")
+            self.font_note.setVisible(missing)
+            if missing:  # the list (and the sample) show the font that is used
+                self.family.blockSignals(True)
+                self.family.setCurrentFont(QFont(usable_font(font_family, target)))
+                self.family.blockSignals(False)
         self.toasts.setChecked(toasts)
         for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(False)
@@ -594,3 +620,4 @@ class Panel(QWidget):
     def closeEvent(self, e):
         e.ignore()
         self.hide()
+        self.closed.emit()

@@ -27,7 +27,7 @@ from .glossary import add_correction
 from .history import HistoryLog, HistoryWindow
 from .i18n import set_lang, t
 from .overlay import Overlay
-from .panel import Panel
+from .panel import Panel, usable_font
 from .picker import GamePicker
 from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
@@ -171,7 +171,7 @@ class Controller(QObject):
         self.bridge.keys.connect(lambda k: self.panel.set_keys(k))
         self.bridge.retranslate.connect(self.translate_again)
 
-        self.overlay = Overlay(self.profile.font_family)
+        self.overlay = Overlay(usable_font(self.profile.font_family, self.profile.target))
         self.overlay.winId()  # native window exists from the start: hotkeys are delivered to it
         self.history = HistoryLog(ROOT / "logs", self.profile.series)
         self.history_win: HistoryWindow | None = None
@@ -319,6 +319,7 @@ class Controller(QObject):
         self.panel.toasts_changed.connect(self.set_toasts)
         self.panel.english_keys_changed.connect(self.set_english_keys)
         self.panel.hotkey_changed.connect(self.set_hotkey)
+        self.panel.closed.connect(self.window_closed)
         self.panel.taking_key.connect(self.taking_key)
         self.panel.show_history.connect(self.show_history)
         self.panel.make_shortcut.connect(self.make_shortcut)
@@ -338,6 +339,15 @@ class Controller(QObject):
         self.refresh_panel()
         if shown:
             self.panel.show()
+
+    def window_closed(self):
+        """The first time the window is closed: say where game-lens went (it keeps running in the tray)."""
+        if self.settings.told_tray:
+            return
+        self.settings.told_tray = True
+        self.settings.save()
+        self._tray_message("game-lens", t("game-lens is still running — its 訳 icon is at the bottom right of the screen "
+                                          "(under ^ if hidden). Click it to open the window; Quit in its menu closes it."))
 
     def show_panel(self):
         if not self.panel.isVisible() and not getattr(self, "_placed", False):
@@ -548,6 +558,7 @@ class Controller(QObject):
         self.shown_seq.clear()
         self.shown.clear()  # translate again with the new settings
         self.reset_watchers()
+        self.overlay.family = usable_font(self.profile.font_family, self.profile.target)
         if "target" in kw or "series" in kw:  # that language's names and terms (glossaries/<series>.<target>.json)
             self.genders = None
             self.pool.submit(self.sync_glossary)
@@ -557,7 +568,7 @@ class Controller(QObject):
             return
         self.profile.font_family = family
         self.profile.save()
-        self.overlay.family = family  # what is on screen now is drawn again in it (the fit is per family)
+        self.overlay.family = usable_font(family, self.profile.target)  # what is on screen now is drawn again in it
         self.overlay.update()
 
     def set_font_scale(self, v: float):
@@ -655,7 +666,7 @@ class Controller(QObject):
         if self.profile.engine not in ENGINE_BY_KEY:
             self.profile.engine = "hymt"
         self.profile.live_engine = self.services.engine_for(self.profile.engine)
-        self.overlay.family = self.profile.font_family
+        self.overlay.family = usable_font(self.profile.font_family, self.profile.target)
         if not os.environ.get("GAMELENS_PROFILE"):
             try:
                 self.settings.profile = path.relative_to(ROOT).as_posix()

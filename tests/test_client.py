@@ -1005,3 +1005,25 @@ def test_a_key_button_takes_the_next_key():
     b.click()
     QTest.keyClick(b, Qt.Key.Key_Escape)
     assert got == [("screen", "Ctrl+Q"), ("peek", "F11")] and b.text() == "Ctrl+Q"
+
+
+def test_a_font_that_is_not_there_is_said_and_another_used():
+    from PySide6.QtWidgets import QApplication
+
+    from gamelens.app import load_fonts
+    from gamelens.panel import Panel, usable_font
+
+    QApplication.instance() or QApplication([])
+    load_fonts()
+    assert usable_font("Kanit", "th") == "Kanit" and usable_font("No Such Font", "th") == "Bai Jamjuree"
+    p = Panel({"toggle": "Ctrl+F8", "screen": "F9", "regions": "F10", "history": "F7"}, "F8")
+    closed = []
+    p.closed.connect(lambda: closed.append(1))
+    p.load("hymt", 0.9, "th", True, font_family="No Such Font")
+    assert not p.font_note.isHidden() and "Bai Jamjuree" in p.font_note.text()
+    assert p.family.currentFont().family() == "Bai Jamjuree"  # what is used is what the list shows
+    p.load("hymt", 0.9, "th", True, font_family="Kanit")
+    assert p.font_note.isHidden() and p.family.currentFont().family() == "Kanit"
+    p.show()
+    p.close()
+    assert closed == [1] and not p.isVisible()

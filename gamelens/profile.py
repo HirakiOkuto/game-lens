@@ -137,6 +137,7 @@ class Settings:
     stop_server_on_exit: bool = True  # ...and stop what we started when it quits
     start_hidden: bool = False  # open only the tray icon once setup is complete
     toasts: bool = True  # short status messages on the game screen
+    told_tray: bool = False  # told once that closing the window leaves game-lens running in the tray
     auto_screen: bool = False  # translate the whole screen by itself when it stands still (menus, quests)
     ui_lang: str = "en"  # the app's own language: en / th
     english_keys: bool = True  # switch the keyboard to English while the game has the focus (games draw the key

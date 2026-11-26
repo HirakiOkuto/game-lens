@@ -45,4 +45,10 @@ def fit_speaker(tl: str, gender: str) -> str:
     elif gender == "male":
         tl = re.sub("(ค่ะ|คะ|ค่า|จ้ะ)" + END, "ครับ", tl)
         tl = re.sub(r"(^|[\s\"'「(…])ดิฉัน", r"\1ผม", tl)
+    elif gender == "neutral":  # the player's own character, whoever plays it: no ครับ / ค่ะ, and ฉัน for "I"
+        if re.fullmatch(r"\s*(ครับผม|ครับ|ค่ะ|คะ)\s*[!.…！。]*\s*", tl):
+            return "อืม" + tl.strip().lstrip("ครับผมค่ะคะ")  # a bare "yes"
+        tl = re.sub(r"\s?(ครับผม|ครับ|ค่ะ|คะ|ค่า)" + END, "", tl)
+        tl = re.sub(r"(^|[\s\"'「(…])(ผม|ดิฉัน)(?!" + "|".join(HAIR) + ")", r"\1ฉัน", tl)
+        tl = re.sub(r" {2,}", " ", tl).strip()
     return tl

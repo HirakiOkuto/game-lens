@@ -8,7 +8,7 @@
   "engine": "hymt",
   "font_family": "Leelawadee UI",
   "font_scale": 0.9,
-  "player_gender": "male",
+  "player_gender": "neutral",
   "regions": [
     {
       "id": "name",

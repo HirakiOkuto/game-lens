@@ -726,6 +726,10 @@ def test_polite_particles_follow_the_speaker():
     he = lambda s: fit_speaker(s, "male")
     assert he("ได้คะแนนเยอะค่ะ") == "ได้คะแนนเยอะครับ" and he("จริงเหรอคะ?") == "จริงเหรอครับ?"
     assert fit_speaker("ไปกันครับ", "") == "ไปกันครับ"  # nobody known: as translated
+    me = lambda s: fit_speaker(s, "neutral")  # the player's own character: no particles at all
+    assert me("ช่วยหน่อยได้ไหมครับ?") == "ช่วยหน่อยได้ไหม?" and me("ไม่ครับ นี่มัน……") == "ไม่ นี่มัน……"
+    assert me("ขอบคุณครับผม") == "ขอบคุณ" and me("ครับ") == "อืม" and me("ระวังนะคะ!") == "ระวังนะ!"
+    assert me("ผมสนใจเรื่องนี้") == "ฉันสนใจเรื่องนี้" and me("ได้คะแนนเยอะ") == "ได้คะแนนเยอะ"
 
 
 def test_menu_labels_under_the_dialogue_region_are_told_from_dialogue():

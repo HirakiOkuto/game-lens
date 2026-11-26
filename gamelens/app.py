@@ -686,6 +686,14 @@ class Controller(QObject):
                 return p
         return None
 
+    def someone_speaking(self) -> bool:
+        """A line of dialogue is on screen: a short name in a name region and text in a dialogue region. (On a menu,
+        whatever lies in the regions is part of the menu.)"""
+        def has(kind, short=False):
+            return any(r.kind == kind and (w := self.watchers.get(r.id)) and w.last_text
+                       and (not short or len(plain_text(w.last_text).strip("【】[]")) <= 10) for r in self.profile.regions)
+        return has("name", short=True) and (has("dialog") or has("subtitle"))
+
     def reset_watchers_keep_overlay(self):
         paid = self.profile.engine in REMOTE and self.profile.engine != "google_free"
         self.watchers = {r.id: TextFollower(confirm=paid) for r in self.profile.regions}
@@ -877,8 +885,7 @@ class Controller(QObject):
         # lines inside a region that is showing its own translation are left to that region
         # ...but only while someone speaks (a short name in a name region): on a menu, the text that happens to lie
         # in a region is part of the menu
-        speaking = any(r.kind == "name" and self.watchers[r.id].last_text and len(plain_text(self.watchers[r.id].last_text)) <= 10
-                       for r in self.profile.regions)
+        speaking = self.someone_speaking()
         skip = [region_px(r.rect, frame.shape) for r in self.profile.regions
                 if regions and speaking and (self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text)]
         self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
@@ -958,7 +965,7 @@ class Controller(QObject):
             self.toast(t("No text on the screen"), 2)
         self.overlay.set_items("screen", items)
         # a menu (many labels; or asked for with F9): the regions' own translations would be pieces of it
-        self.screen_menu = len(items) >= 8 or not self.screen_auto
+        self.screen_menu = len(items) >= 8 or not self.screen_auto or not self.someone_speaking()
         if self.screen_menu:
             for r in self.profile.regions:
                 self.overlay.clear(r.id)

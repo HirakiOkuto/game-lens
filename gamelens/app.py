@@ -391,11 +391,22 @@ class Controller(QObject):
                          kwargs={"ocr_lang": self.profile.src_lang},
                          daemon=True).start()
 
+    def warm_up(self, engine: str, src_lang: str):
+        try:
+            log.info("warmed up: %s", self.api.warmup(src_lang, engine))
+        except LensError as e:
+            self._warmed = None
+            log.info("warm-up failed: %s", e)
+
     def poll_status(self):
         st = {"server": False, "health": None}
         try:
             st["health"] = self.api.health()
             st["server"] = True
+            warm = (self.profile.live_engine, self.profile.src_lang)
+            if st["health"].get(warm[0]) and getattr(self, "_warmed", None) != warm:
+                self._warmed = warm  # once for this model and language: the first menu and line do not wait for it
+                self.pool.submit(self.warm_up, *warm)
             if not getattr(self, "_keys_loaded", False):
                 self._keys_loaded = True  # first: two polls can overlap while the server is slow to answer
                 self.bridge.keys.emit(self.api.keys())

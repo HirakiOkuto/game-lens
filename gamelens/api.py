@@ -70,6 +70,9 @@ class LensClient:
                 "allow_cloud": allow_cloud, "context": context}
         return self._call("POST", "/translate/lines", json=body)
 
+    def warmup(self, src_lang: str, engine: str) -> dict:
+        return self._call("POST", "/warmup", json={"src_lang": src_lang, "engine": engine})
+
     def usage(self) -> dict:
         return self._call("GET", "/usage")
 

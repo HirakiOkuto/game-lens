@@ -252,6 +252,28 @@ def test_translate_lines_cache_glossary_and_skips(monkeypatch, tmp_path):
     assert client.post("/translate/lines", json={**req, "target": "fr"}, headers=h).status_code == 400
 
 
+def test_menu_text_differing_only_in_numbers_is_not_translated_again(monkeypatch, tmp_path):
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    fake = FakeEngine([{"lines": [{"id": "a", "tl": "พลังโจมตีเพิ่มขึ้น 4% และ HP เพิ่มขึ้น 1%"}, {"id": "b", "tl": "เลเวล 3"},
+                                  {"id": "c", "tl": "สามชิ้น"}, {"id": "d", "tl": "อรุณสวัสดิ์ 5"}]},
+                       {"lines": [{"id": "c", "tl": "เจ็ดชิ้น"}, {"id": "d", "tl": "อรุณสวัสดิ์ 6"}, {"id": "e", "tl": "1/1"}]}])
+    monkeypatch.setitem(engines._engines, "local", fake)
+    ui = lambda i, s: {"id": i, "src": s, "kind": "ui"}  # noqa: E731
+    req = {"engine": "local", "lines": [ui("a", "攻撃力が4%上昇し、HPが1%増加する。"), ui("b", "Lv.3"), ui("c", "3個"),
+                                        {"id": "d", "src": "おはよう5", "kind": "dialog"}]}
+    client.post("/translate/lines", json=req, headers=h)
+    req2 = {"engine": "local", "lines": [ui("a", "攻撃力が7.1%上昇し、HPが2%増加する。"), ui("b", "Lv.12"), ui("c", "7個"),
+                                         {"id": "d", "src": "おはよう6", "kind": "dialog"}, ui("e", "1/1")]}
+    d = client.post("/translate/lines", json=req2, headers=h).json()
+    assert d["lines"]["a"] == "พลังโจมตีเพิ่มขึ้น 7.1% และ HP เพิ่มขึ้น 2%" and d["lines"]["b"] == "เลเวล 12"
+    assert sorted(d["cached"]) == ["a", "b"]  # the numbers put into the earlier translations
+    assert d["lines"]["c"] == "เจ็ดชิ้น"  # its number was written out as a word: translated itself
+    assert d["lines"]["d"] == "อรุณสวัสดิ์ 6"  # dialogue is always translated itself
+    assert app_mod.make_pattern(["1", "1"], "1/1") is None  # the same number twice: which is which?
+    assert app_mod.fill_pattern(app_mod.make_pattern(["5"], "5 items"), ["1"], "en") is None  # "1 items"
+    assert app_mod.fill_pattern(app_mod.make_pattern(["5"], "5 items"), ["8"], "en") == "8 items"
+
+
 def test_translate_lines_remote_needs_permission(monkeypatch, tmp_path):
 
 
@@ -394,7 +416,7 @@ def test_hymt_retries_with_stand_ins_when_a_name_is_transliterated(monkeypatch):
         src = p.split("[Source Text]\n")[1]
         return Resp({"ミイティの父": "พ่อของมิตตี้", "N1の父": "พ่อของ N1", "ノノ": "Nono จ้ะ", "行こう": "ไปกัน"}[src])
 
-    monkeypatch.setattr(engines.httpx, "post", fake_post)
+    monkeypatch.setattr(engines, "http_post", fake_post)
     g = {"characters": [{"src": "ミィティ", "tl": "Mitty"}, {"src": "ノノ", "tl": "Nono"}], "terms": []}
     e = engines.HyMtEngine()
     assert e.translate_page(["ミイティの父"], "ja", "th", [], g, style="game") == ["พ่อของ Mitty"] and len(sent) == 2
@@ -507,7 +529,7 @@ def test_index_translate_gets_names_as_a_hard_constraint(monkeypatch):
         sent.append(json)
         return Resp()
 
-    monkeypatch.setattr(engines.httpx, "post", fake_post)
+    monkeypatch.setattr(engines, "http_post", fake_post)
     e = engines.IndexTranslateEngine()
     out = e.translate_page(["ミイティ、行こう"], "ja", "th", [{"src": "おはよう", "tl": "อรุณสวัสดิ์"}],
                            {"characters": [{"src": "ミィティ", "tl": "Mitty"}]}, style="game")

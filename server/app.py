@@ -8,7 +8,9 @@ text and translations.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -174,6 +176,72 @@ def line_key(src: str, kind: str, text: str) -> str:
     return hashlib.sha1(f"{src}|{'ui2' if kind == 'ui' else kind}|{text}".encode()).hexdigest()
 
 
+class WarmReq(BaseModel):
+    src_lang: str = "ja"
+    engine: str = "local"
+
+
+@app.post("/warmup", dependencies=[Depends(auth)])
+async def warmup(req: WarmReq):
+    """Do once what the first reading and the first translations would otherwise wait for: load the text reader
+    (~1.3 s) and let a local translation model answer a few requests at a time (its first such round takes ~1 s
+    longer). Nothing of it is kept."""
+    src = normalize_lang(req.src_lang)
+    done = {}
+
+    def work():
+        t0 = time.perf_counter()
+        probe = np.full((64, 320, 3), 255, np.uint8)
+        cv2.putText(probe, "OCR 123", (10, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 2)
+        with ocr_lock:
+            read_lines(probe, src)
+        done["ocr_ms"] = round((time.perf_counter() - t0) * 1000)
+        if req.engine in ("hymt", "index"):
+            eng = get_engine(req.engine)
+            if eng.available():
+                t0 = time.perf_counter()
+                try:
+                    eng.translate_page(["はい", "いいえ", "戻る", "決定"], src, "th", [], {}, style="game", kinds=["ui"] * 4)
+                    done["model_ms"] = round((time.perf_counter() - t0) * 1000)
+                except EngineError as e:
+                    done["model_error"] = str(e)[:200]
+
+    await run_in_thread(work)
+    return done
+
+
+# Menu text that differs from text translated before only in its numbers ("攻撃力が4%上昇" / "7.1%上昇", "Lv.3",
+# "12/30") is not translated again: the earlier translation is kept as a pattern and the numbers are put in.
+NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def mask_numbers(text: str) -> tuple[str, list[str]]:
+    """The text with its numbers taken out, and the numbers in order."""
+    nums = NUM_RE.findall(text)
+    return NUM_RE.sub("\x00", text), nums
+
+
+def make_pattern(nums: list[str], tl: str) -> str | None:
+    """The translation as a pattern for other numbers; None where that is not safe: the numbers must all differ
+    and each stand in the translation exactly once, with no number besides them."""
+    if not nums or len(set(nums)) != len(nums) or sorted(NUM_RE.findall(tl)) != sorted(nums):
+        return None
+    return json.dumps({"t": NUM_RE.sub(lambda m: f"\x00{nums.index(m.group())}\x00", tl), "n": nums}, ensure_ascii=False)
+
+
+def fill_pattern(pattern: str, nums: list[str], target: str) -> str | None:
+    try:
+        p = json.loads(pattern)
+        if len(p["n"]) != len(nums):
+            return None
+        # English words change with one / many ("1 item", "5 items"): only like for like
+        if target == "en" and any((a.strip("0.,") == "1") != (b.strip("0.,") == "1") for a, b in zip(p["n"], nums)):
+            return None
+        return re.sub("\x00(\\d+)\x00", lambda m: nums[int(m.group(1))], p["t"])
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
 @app.post("/translate/lines", dependencies=[Depends(auth)])
 async def translate_lines(req: TranslateLinesReq):
     """Game text lines -> translations, cached per line (a line seen before comes back without an engine call)."""
@@ -186,6 +254,9 @@ async def translate_lines(req: TranslateLinesReq):
     gver, glossary = store.get_glossary(glossary_key(req.series, req.target)) if req.series else (0, {})
     keys = {l.id: line_key(src, l.kind, l.src.strip()) for l in req.lines}
     cached = store.get_lines(sorted(set(keys.values())), req.target, gver, req.engine)
+    masked = {l.id: mask_numbers(l.src.strip()) for l in req.lines if l.kind == "ui"}
+    pkeys = {i: line_key(src, "ui#n", m) for i, (m, nums) in masked.items() if nums and keys[i] not in cached}
+    patterns = store.get_lines(sorted(set(pkeys.values())), req.target, gver, req.engine) if pkeys else {}
     # an earlier fallback is cached under the requested engine; retry once that engine is usable again
     remote_ok = req.engine in REMOTE and req.allow_cloud and get_engine(req.engine).available()
     out: dict[str, str] = {}
@@ -209,6 +280,13 @@ async def translate_lines(req: TranslateLinesReq):
             from_cache.append(l.id)
             engines_used.append(hit[0])
             continue
+        pat = patterns.get(pkeys.get(l.id, ""))
+        filled = fill_pattern(pat[1], masked[l.id][1], req.target) if pat and not remote_ok else None
+        if filled:
+            out[l.id] = filled
+            from_cache.append(l.id)
+            engines_used.append(pat[0])
+            continue
         todo.append({"id": l.id, "src": text, "kind": l.kind})
     metrics: dict = {}
     if todo:
@@ -222,6 +300,10 @@ async def translate_lines(req: TranslateLinesReq):
         for b in todo:
             out[b["id"]] = tl.get(b["id"], "")
         store.put_lines([(keys[b["id"]], tl[b["id"]]) for b in todo if b["id"] in tl], req.target, gver, req.engine, used)
+        new = [(pkeys[b["id"]], p) for b in todo if b["id"] in pkeys and tl.get(b["id"])
+               and (p := make_pattern(masked[b["id"]][1], tl[b["id"]]))]
+        if new:
+            store.put_lines(new, req.target, gver, req.engine, used)
         engines_used.append(used)
     engine = max(set(engines_used), key=engines_used.count) if engines_used else "none"
     return {"lines": out, "engine": engine, "engineRequested": req.engine, "cached": from_cache,

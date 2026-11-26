@@ -19,6 +19,26 @@ class EngineError(RuntimeError):
     pass
 
 
+# One connection pool for the local model servers, kept open. httpx.post() / httpx.get() make a new client for every
+# call, which costs ~140 ms each on Windows (certificates, proxy settings): more than the model needs for a menu
+# label, and the health check asks every engine every 2 s.
+# (llama.cpp closes a connection idle for 5 s: ours are let go a little earlier)
+_local = httpx.Client(timeout=120, trust_env=False,
+                      limits=httpx.Limits(max_connections=32, max_keepalive_connections=16, keepalive_expiry=4))
+
+
+def http_post(url: str, json, timeout: float = 120):
+    try:
+        return _local.post(url, json=json, timeout=timeout)
+    except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
+        # the server closed the kept connection just as it was used again (or was restarted): once more on a new one
+        return _local.post(url, json=json, timeout=timeout)
+
+
+def http_get(url: str, timeout: float = 5):
+    return _local.get(url, timeout=timeout)
+
+
 class LlamaCppEngine:
     name = "local"
 
@@ -29,7 +49,7 @@ class LlamaCppEngine:
 
     def available(self) -> bool:
         try:
-            return httpx.get(f"{self.url}/models", timeout=0.8).status_code == 200
+            return http_get(f"{self.url}/models", timeout=0.8).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -44,7 +64,7 @@ class LlamaCppEngine:
             "response_format": {"type": "json_schema", "json_schema": {"name": "out", "strict": True, "schema": schema}},
         }
         try:
-            r = httpx.post(f"{self.url}/chat/completions", json=body, timeout=self.timeout)
+            r = http_post(f"{self.url}/chat/completions", json=body, timeout=self.timeout)
         except httpx.HTTPError as e:
             raise EngineError(f"llama.cpp unreachable at {self.url}: {e}") from e
         if r.status_code != 200:
@@ -177,7 +197,7 @@ class TranslateGemmaEngine:
 
     def available(self) -> bool:
         try:
-            return httpx.get(f"{self.url}/health", timeout=0.8).status_code == 200
+            return http_get(f"{self.url}/health", timeout=0.8).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -200,7 +220,7 @@ class TranslateGemmaEngine:
         body = {"prompt": self._prompt(text, src, tgt), "n_predict": 512, "temperature": 0, "stop": ["<end_of_turn>"],
                 "cache_prompt": True}
         try:
-            r = httpx.post(f"{self.url}/completion", json=body, timeout=120)
+            r = http_post(f"{self.url}/completion", json=body, timeout=120)
         except httpx.HTTPError as e:
             raise EngineError(f"TranslateGemma unreachable at {self.url}: {e}") from e
         if r.status_code != 200:
@@ -233,7 +253,7 @@ class PlamoTranslateEngine:
 
     def available(self) -> bool:
         try:
-            return httpx.get(f"{self.url}/health", timeout=0.8).status_code == 200
+            return http_get(f"{self.url}/health", timeout=0.8).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -274,7 +294,7 @@ class PlamoTranslateEngine:
             body = {"prompt": self._prompt(text, seen, used, src, target, style), "n_predict": 512, "temperature": 0,
                     "stop": [self.TAG, "<|plamo:bos|>"], "cache_prompt": True}
             try:
-                r = httpx.post(f"{self.url}/completion", json=body, timeout=120)
+                r = http_post(f"{self.url}/completion", json=body, timeout=120)
             except httpx.HTTPError as e:
                 raise EngineError(f"PLaMo Translate unreachable at {self.url}: {e}") from e
             if r.status_code != 200:
@@ -375,7 +395,7 @@ class HyMtEngine:
 
     def available(self) -> bool:
         try:
-            return httpx.get(f"{self.url}/health", timeout=0.8).status_code == 200
+            return http_get(f"{self.url}/health", timeout=0.8).status_code == 200
         except httpx.HTTPError:
             return False
 
@@ -405,7 +425,7 @@ class HyMtEngine:
     def _ask(self, prompt: str) -> str:
         body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True}
         try:
-            r = httpx.post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
+            r = http_post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
         except httpx.HTTPError as e:
             raise EngineError(f"Hy-MT unreachable at {self.url}: {e}") from e
         if r.status_code != 200:
@@ -498,7 +518,7 @@ class IndexTranslateEngine(HyMtEngine):
         body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True,
                 "chat_template_kwargs": {"enable_thinking": False}}
         try:
-            r = httpx.post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
+            r = http_post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
         except httpx.HTTPError as e:
             raise EngineError(f"Index-Translate unreachable at {self.url}: {e}") from e
         if r.status_code != 200:

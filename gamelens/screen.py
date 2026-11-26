@@ -157,10 +157,9 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
     """A label's translation on one line where it fits on one line at its size: a box squeezed between icons would
     otherwise break it letter by letter. Widened around its middle (or from its start), within the picture, but
     never over other text of the screen (`others`: boxes of every line read, `own` among them) - there the font
-    gets smaller instead, nor off the plain panel or button it is on: there it moves towards the side that has
-    room (a label at a card's right edge grows to the left). Where what is beside it is not known to be empty (a
-    picture), a left-aligned label (a table's) only grows to the right, a right-aligned one to the left; a centred
-    one (under an icon) on both sides."""
+    gets smaller instead, nor off the plain panel or button it is on. A left-aligned label (a table's) only grows
+    to the right, a right-aligned one to the left; a centred one (under an icon) on both sides, moving within its
+    panel towards the side that has room."""
     x, y, w, h = rect
     need = int(0.55 * size * sum(c not in THAI_MARKS for c in text)) + 6
     if w >= need:
@@ -180,11 +179,13 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
             lo = max(lo, b[0] + b[2] + 4)
         elif b[0] >= ox:
             hi = min(hi, b[0] - 4)
-    if bounds is None:  # (inside `bounds` the background is plain: nothing there to cover)
-        if align == "left":
-            lo = x
-        elif align == "right":
-            hi = x + w
+    # a left-aligned label (a table's, a skill's name beside its icon) only grows to the right, a right-aligned one
+    # to the left: what is on the other side (an icon, the card's edge) is not known to be empty. Only a centred
+    # one moves sideways within its panel
+    if align == "left":
+        lo = x
+    elif align == "right":
+        hi = x + w
     new = min(need, max(3 * w, 220), hi - lo)
     if new <= w:
         return rect
@@ -229,7 +230,9 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
     tilted = {id(g[0]["bbox"]): g[0] for g in groups if len(g) == 1 and g[0].get("tilt") and g[0].get("th")}
 
     def letters(looks, own):
-        h = sorted(a.glyph_h for a in looks)[len(looks) // 2]
+        # (letters are never taller than most of the reader's box: a glow or the edge of what lies behind light text
+        # measured with them made a hint 29 px "tall" in a 26 px box)
+        h = sorted(min(a.glyph_h, round(0.9 * a.box[3])) for a in looks)[len(looks) // 2]
         t = tilted.get(id(own))  # the box of a tilted line is taller than its letters: its own height counts
         return min(h, round(0.72 * t["th"])) if t else h
 
@@ -248,6 +251,12 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
             rect, align = (int(cx - wide / 2), int(cy - tall / 2), int(wide), int(tall)), "center"
         elif len(looks) == 1:
             rect, align = place(a, size)
+            if align == "right" and next_to(own, others, a.free_right):
+                # what stops it on the right is the next piece of text of its row (a skill's name and its time
+                # chip), not the edge of a panel: it is left-aligned, and its translation does not grow over the icon
+                # on its left
+                x, _, w, _ = a.box
+                rect, align = (x, rect[1], w + max(0, a.free_right - 4), rect[3]), "left"
             rect = room_for(rect, align, tl, size, frame.shape[1], own, others, a)
         else:
             rect, align = place_block(looks, size)
@@ -261,6 +270,13 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
     if patch is not None:
         items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)
     return items
+
+
+def next_to(own, others, gap: int) -> bool:
+    """Another line of the same row starts right after this one (within `gap` and a few pixels)."""
+    x, y, w, h = own
+    return any(b is not own and b[0] >= x + w - 2 and b[0] - (x + w) <= gap + 12 and
+               min(y + h, b[1] + b[3]) - max(y, b[1]) > 0.5 * min(h, b[3]) for b in others)
 
 
 def keep_apart(items: list[Item]):

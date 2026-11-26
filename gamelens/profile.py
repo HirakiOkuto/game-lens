@@ -58,6 +58,7 @@ class Profile:
     engine: str = "hymt"
     font_family: str = "Leelawadee UI"
     font_scale: float = 0.9  # Thai size relative to the Japanese line height
+    player_gender: str = ""  # female / male: how the player's character speaks (answers, lines without a name)
     regions: list[Region] = field(default_factory=list)
     path: str = ""
 

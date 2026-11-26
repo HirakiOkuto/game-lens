@@ -288,8 +288,10 @@ class Controller(QObject):
         self.bridge.status.emit(st)
 
     def fit_speaker(self, payload: dict):
-        """Polite particles of the speaker's gender (the model cannot tell who speaks): the name on screen now."""
-        if payload.get("kind") not in ("dialog", "subtitle") or not payload.get("tl"):
+        """Polite particles of the speaker's gender (the model cannot tell who speaks): the name on screen now. The
+        player's own character answers (choices) and speaks lines that come without a name (or with the player's
+        own name, which is not in Japanese)."""
+        if payload.get("kind") not in ("dialog", "subtitle", "choice") or not payload.get("tl"):
             return
         if self.genders is None:
             path = ROOT / "glossaries" / f"{self.profile.series}.{self.profile.target}.json"
@@ -298,7 +300,10 @@ class Controller(QObject):
             except (ValueError, OSError):
                 self.genders = {}
         names = [self.watchers[r.id].last_text for r in self.profile.regions if r.kind == "name" and r.id in self.watchers]
-        gender = next((g for n in names if (g := gender_of(n, self.genders))), "")
+        if payload["kind"] == "choice" or not any(names):
+            gender = self.profile.player_gender
+        else:
+            gender = next((g for n in names if (g := gender_of(n, self.genders))), "")
         if gender:
             payload["tl"] = fit_speaker(payload["tl"], gender)
             for it in payload.get("items", []):

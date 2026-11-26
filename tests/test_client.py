@@ -171,6 +171,16 @@ def test_thai_breakable_inserts_zero_width_spaces():
     s = thai.breakable("ผู้บัญชาการคะวันนี้อากาศดีมาก")
     assert thai.ZWSP in s and s.replace(thai.ZWSP, "") == "ผู้บัญชาการคะวันนี้อากาศดีมาก"
     assert thai.breakable("Hello world") == "Hello world"
+    if thai._icu is None:
+        return
+    parts = lambda t: thai.breakable(t).split(thai.ZWSP)  # noqa: E731
+    # words, every time (the iterator once read a buffer that was gone, and broke letter by letter at random)
+    for _ in range(20):
+        assert parts("ภาษาไทยเป็นภาษาที่สวยงาม" + " " * _)[:3] == ["ภาษา", "ไทย", "เป็น"]
+    # a loanword ICU does not know breaks between syllables, never inside one or before a vowel sign
+    assert parts("ไอเทมเควสต์") == ["ไอ", "เทม", "เควสต์"]
+    for w in ("อนิม่า", "อุปกรณ์", "สตาร์ลิงก์", "แท่นหินแห่งเสียงสะท้อน"):
+        assert all(q and q[0] not in thai._FOLLOWS and q[-1] not in "เแโใไ" for q in parts(w)), parts(w)
 
 
 def test_overlay_fit_wraps_thai_and_shrinks():
@@ -493,6 +503,12 @@ def test_paragraphs_join_running_text_but_not_list_rows():
     table = paragraphs([{"id": "a", "bbox": [670, 523, 24, 13], "text": "攻撃"}, {"id": "b", "bbox": [670, 545, 59, 13], "text": "ブレイク値"},
                         {"id": "c", "bbox": [670, 567, 39, 14], "text": "EX強度"}])
     assert [len(g) for g in table] == [1, 1, 1]
+    # a label under an icon wraps after a few letters in its narrow tab (bag: キボのタ / マゴ, クエスト / アイテム);
+    # the next tab's label further down stays apart
+    tabs = paragraphs([{"id": "a", "bbox": [155, 672, 57, 16], "text": "キボのタ"}, {"id": "b", "bbox": [169, 691, 30, 15], "text": "マゴ"},
+                       {"id": "c", "bbox": [155, 773, 58, 15], "text": "クエスト"}, {"id": "d", "bbox": [155, 792, 58, 15], "text": "アイテム"},
+                       {"id": "e", "bbox": [169, 472, 30, 16], "text": "装備"}])
+    assert sorted("".join(l["text"] for l in g) for g in tabs) == ["キボのタマゴ", "クエストアイテム", "装備"]
     # a card's text set so tightly that the reader's boxes overlap and come out in different heights (Kibo factors)
     card = paragraphs([{"id": "a", "bbox": [387, 489, 129, 13], "text": "エネミーがブレイクした"},
                        {"id": "c", "bbox": [387, 514, 80, 15], "text": "75%增加する。"},

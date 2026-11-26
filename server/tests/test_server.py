@@ -345,6 +345,17 @@ def test_tighten_shrinks_padded_box_to_glyphs():
     assert x == 0 and w == 200 and 22 <= h <= 25
     assert all(type(v) is int for v in (x, y, w, h))  # JSON-serialisable
     assert _tighten(img, [0, 0, 3, 3]) == [0, 0, 3, 3]
+    # a selected tab: its first letters dimmed by a glow fall to the other side of the threshold. The box is too
+    # narrow for the four letters read in it, so it keeps the detector's width (the translation covers them all)
+    tab = np.full((24, 70, 3), 30, np.uint8)
+    tab[:, :35] = 150  # the glow behind the first two
+    for i, v in enumerate((200, 200, 250, 250)):
+        tab[4:21, 3 + i * 16 : 16 + i * 16] = v
+    cut = _tighten(tab, [0, 0, 70, 24])
+    assert cut[0] >= 30  # the threshold alone keeps only the bright half
+    x, y, w, h = _tighten(tab, [0, 0, 70, 24], "アイテム")
+    assert x == 0 and w == 70
+    assert _tighten(tab, [0, 0, 70, 24], "OK") == cut  # two Latin letters do fit there
 
 
 def test_read_lines_real_pipeline_returns_json_ready_boxes(monkeypatch):
@@ -366,6 +377,32 @@ def test_read_lines_real_pipeline_returns_json_ready_boxes(monkeypatch):
     assert lines and json.dumps(lines)
     x, y, w, h = lines[0]["bbox"]
     assert h <= 26 and y >= 8
+
+
+def test_faint_lines_reads_only_new_boxes_in_the_languages_letters(monkeypatch):
+    """A whole screen looked at again with its contrast raised: boxes where no line is are read from the picture
+    itself; a box over a line already read, and icons read as stray marks, are not taken."""
+    import ocr
+
+    class Res:
+        def __init__(self, boxes=None, txts=None, scores=None):
+            self.boxes, self.txts, self.scores = boxes, txts, scores
+
+    box = lambda x, y, w, h: np.array([[x + 32, y + 32], [x + w + 32, y + 32], [x + w + 32, y + h + 32], [x + 32, y + h + 32]], float)
+    reads = {44: ("アニマ", 0.99), 30: ("十", 0.95), 60: ("アイテム", 0.6)}  # by the width of the crop read
+
+    def engine(img, use_det=True, use_cls=False, use_rec=True):
+        if use_det:  # the boosted screen: a known line, a dim tab label, an icon, a doubtful reading
+            return Res([box(155, 269, 58, 18), box(162, 573, 44, 15), box(300, 100, 30, 15), box(300, 200, 60, 15)])
+        t, s = reads[img.shape[1]]
+        return Res(txts=[t], scores=[s])
+
+    monkeypatch.setattr(ocr, "_get_rapid", lambda v, l: engine)
+    img = np.full((1080, 1920, 3), 90, np.uint8)
+    known = [{"bbox": [155, 269, 58, 18], "dbox": [152, 266, 64, 24], "text": "アイテム", "conf": 1.0}]
+    got = ocr.faint_lines(img, "ja", known)
+    assert [l["text"] for l in got] == ["アニマ"] and got[0]["dbox"] == [162, 573, 44, 15]
+    assert json.dumps(got)
 
 
 def test_translate_lines_answers_a_bare_glossary_name_without_an_engine(monkeypatch, tmp_path):

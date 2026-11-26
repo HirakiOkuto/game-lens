@@ -22,7 +22,7 @@ import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from ocr import NO_SPACE, normalize_lang, read_dialog, read_lines, read_name, route
+from ocr import NO_SPACE, normalize_lang, read_dialog, read_lines, read_name, read_screen, route
 from store import Store
 from translate.engines import (REMOTE, EngineError, extract_glossary, fold_name, get_engine, glossary_terms, match_name,
                                match_term, translate_blocks)
@@ -136,6 +136,8 @@ async def ocr_lines(
                 lines = read_name(img, src, lambda t: (match_term(t, terms) or (None,))[0], fold_name)
             elif kind == "dialog":
                 lines = read_dialog(img, src, align == "center", lambda t: not already_in(t, "en", "ja") or src != "ja")
+            elif kind == "screen":  # a whole screen (a menu): its faint text too
+                lines = read_screen(img, src, min_score)
             else:
                 lines = read_lines(img, src, min_score)
         for i, l in enumerate(lines):

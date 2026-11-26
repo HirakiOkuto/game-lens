@@ -1038,7 +1038,7 @@ class Controller(QObject):
     def job_screen(self, frame: np.ndarray, gen: int, skip: list, auto: bool):
         p = self.profile
         try:
-            ocr = self.api.ocr_lines(frame, p.src_lang, frame_h=frame.shape[0])
+            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen", frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if gen == self.screen_gen:
@@ -1195,7 +1195,7 @@ class Controller(QObject):
     def job_recheck(self, frame: np.ndarray, gen: int):
         try:
             p = self.profile
-            ocr = self.api.ocr_lines(frame, p.src_lang, frame_h=frame.shape[0])
+            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen", frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], [], p.src_lang)
             new = [l["text"] for l in lines
                    if len(l["text"]) >= 2 and not any(similar(l["text"], t) >= 0.75 for t in self.screen_read)]

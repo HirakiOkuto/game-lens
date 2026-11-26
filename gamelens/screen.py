@@ -164,7 +164,10 @@ def paragraphs(lines: list[dict], frame: np.ndarray | None = None) -> list[list[
             same_size = abs(h - ph) <= 0.35 * max(h, ph)
             same_left = abs(x - g[0]["bbox"][0]) <= 0.6 * h
             same_middle = abs((x + w / 2) - (g[0]["bbox"][0] + g[0]["bbox"][2] / 2)) <= 0.6 * h
-            wrapped = len(plain_text(g[-1]["text"])) >= 8
+            # (a label under an icon wraps after a few letters in its narrow column, キボのタ / マゴ: set tight
+            # around one middle, the upper line at least as wide and not ending a sentence)
+            wrapped = len(plain_text(g[-1]["text"])) >= 8 or (
+                gap <= 0.35 * h and same_middle and pw >= w - 0.3 * h and not g[-1]["text"].endswith(tuple("。！？!?」")))
             # (lines set tightly have boxes that overlap: the reader's boxes reach above and below the letters)
             if (-0.45 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped
                     and same_ink(g[-1], l)):
@@ -307,6 +310,10 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
             rect = room_for(rect, align, tl, size, frame.shape[1], own, others, a)
         else:
             rect, align = place_block(looks, size)
+        if len(looks) > 1:
+            # a block's colours from its clearest line: one line's background can be measured off the panel (the
+            # lighter strip beside a tab), and text and background as close as that get a contrasting outline
+            a = max(looks, key=lambda k: abs(luminance(k.fg) - luminance(k.bg)))
         items.append(Item(rect=rect, text=tl, fg=a.fg, outline=outline_for(a.fg, a.bg, all(k.calm for k in looks)),
                           max_px=size, align=align, vcenter=len(looks) == 1))
         items[-1].angle = t["tilt"] if t else 0.0

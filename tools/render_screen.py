@@ -58,7 +58,7 @@ def main():
         k = min(1.5, 1080 / frame.shape[0]) if frame.shape[0] < 1000 else 1.0  # (as the app's client enlarges 720p)
         big = cv2.resize(frame, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC) if k > 1 else frame
         t0 = time.perf_counter()
-        found = reader.read_lines(cv2.cvtColor(big, cv2.COLOR_BGR2RGB), prof.src_lang)
+        found = reader.read_screen(cv2.cvtColor(big, cv2.COLOR_BGR2RGB), prof.src_lang)
         for i, l in enumerate(found):
             l["id"] = f"l{i}"
             l["bbox"], l["dbox"] = [round(v / k) for v in l["bbox"]], [round(v / k) for v in l["dbox"]]
@@ -67,7 +67,7 @@ def main():
                     l[key] = round(l[key] / k)
         ocr = {"lines": found, "ms": round((time.perf_counter() - t0) * 1000)}
     else:
-        ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
+        ocr = api.ocr_lines(frame, prof.src_lang, kind="screen", frame_h=frame.shape[0])
     lines = lines_to_translate(ocr["lines"], [], prof.src_lang)
     groups = paragraphs(lines, frame)
     res = api.translate_lines(requests(groups, prof.src_lang), series=prof.series, target=prof.target,

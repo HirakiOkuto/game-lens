@@ -159,9 +159,14 @@ def _is_piece_of(part: str, whole: str) -> bool:
     return sum(b.size for b in blocks) >= 0.75 * len(part)
 
 
-def _tighten(img: np.ndarray, bbox: list[int]) -> list[int]:
+def _wide(c: str) -> bool:
+    return "⺀" <= c <= "鿿" or "가" <= c <= "힣" or "！" <= c <= "｠"
+
+
+def _tighten(img: np.ndarray, bbox: list[int], text: str = "") -> list[int]:
     """PP-OCR's detector pads its boxes (and small crops are padded further): shrink a line box to its ink, so
-    the box height is the glyph height (the client sizes the translation from it)."""
+    the box height is the glyph height (the client sizes the translation from it). text: what was read there -
+    a box too narrow for its letters lost some of them to the threshold."""
     x, y, w, h = bbox
     crop = img[y : y + h, x : x + w]
     if crop.size == 0 or w < 4 or h < 4:
@@ -177,7 +182,14 @@ def _tighten(img: np.ndarray, bbox: list[int]) -> list[int]:
     x0, x1 = max(0, cols[0] - 1), min(w, cols[-1] + 2)
     if (y1 - y0) < 0.3 * h:
         return bbox  # most likely an underline or a frame line, not the text: keep the detector's box
-    if w - (x1 - x0) > max(0.08 * w, 1.5 * h):
+    # A box too narrow for the letters read in it lost some to the threshold: a selected tab's glow made its
+    # first two letters look like background, and the translation went over the last two only
+    # (Japanese letters are at least 0.6 as wide as they are high, Latin ones a quarter; only a cut of about a
+    # letter counts, and only on a line set across)
+    gh = y1 - y0
+    need = gh * sum(0.6 if _wide(c) else 0.25 for c in text.strip())
+    lost = w > h and (x1 - x0) < need and w - (x1 - x0) >= 0.8 * gh
+    if w - (x1 - x0) > max(0.08 * w, 1.5 * h) or lost:
         # much more cut off than the detector's padding: one threshold does not tell the letters from what is
         # behind them (light text over the 3D scene: its coloured words and the end of the line were lost).
         # The detector's own width stays; the height is still the letters'
@@ -241,13 +253,69 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         lines.append(line)
     # dbox is the detector's own box: steady in height and position even over a busy scene, where tightening
     # (bbox, right for text on a panel) is fooled by what lies behind the glyphs
-    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"]), dbox=l["bbox"]) for l in lines])
+    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"], l["text"]), dbox=l["bbox"]) for l in lines])
     if lang in NO_SPACE:
         lines = _drop_ruby(lines)
     lines = _rows(lines)
     if lang == "ja":
         for l in lines:
             l["text"] = fix_kana(l["text"])
+    return lines
+
+
+def _script_chars(text: str, lang: str) -> int:
+    """Letters of the language's own script in a reading (icons are read as stray marks and Latin letters)."""
+    if lang == "ja" or lang.startswith("zh"):
+        return sum("぀" <= c <= "ヿ" or "一" <= c <= "鿿" for c in text)
+    if lang == "ko":
+        return sum("가" <= c <= "힣" for c in text)
+    return sum(c.isalpha() for c in text)
+
+
+def faint_lines(img: np.ndarray, lang: str, lines: list[dict], most: int = 16) -> list[dict]:
+    """Lines of a whole screen that the detector missed: dim text on a panel of nearly its own colour (a tab that is
+    not selected, grey on grey). The screen's contrast is raised piece by piece (CLAHE) and only the detector
+    looks again; what it finds where no line is gets read from the picture itself, and only readings in the
+    language's own letters, read surely, count (icons come out as stray marks)."""
+    lang = normalize_lang(lang)
+    engine = _get_rapid(*route(lang))
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB)
+    lab[..., 0] = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(16, 9)).apply(lab[..., 0])
+    pad = 32
+    res = engine(np.pad(cv2.cvtColor(lab, cv2.COLOR_LAB2RGB), ((pad, pad), (pad, pad), (0, 0)), mode="edge"),
+                 use_det=True, use_cls=False, use_rec=False)
+    if res is None or res.boxes is None:
+        return []
+    H, W = img.shape[:2]
+    found = []
+    for box in res.boxes:
+        x0, y0 = max(0, int(box[:, 0].min()) - pad), max(0, int(box[:, 1].min()) - pad)
+        x1, y1 = min(W, int(np.ceil(box[:, 0].max())) - pad), min(H, int(np.ceil(box[:, 1].max())) - pad)
+        w, h = x1 - x0, y1 - y0
+        if h < 8 or w < 1.5 * h:
+            continue
+        covered = max((max(0, min(x1, l["dbox"][0] + l["dbox"][2]) - max(x0, l["dbox"][0]))
+                       * max(0, min(y1, l["dbox"][1] + l["dbox"][3]) - max(y0, l["dbox"][1])) for l in lines), default=0)
+        if covered <= 0.2 * w * h:
+            found.append((x0, y0, w, h))
+    out = []
+    for x, y, w, h in sorted(found, key=lambda b: -b[3])[:most]:
+        r = engine(img[y:y + h, x:x + w], use_det=False, use_cls=False, use_rec=True)
+        if r is None or not r.txts or float(r.scores[0]) < 0.9:
+            continue
+        text = r.txts[0].strip()
+        need = 2 if lang in NO_SPACE or lang == "ko" else 3
+        if _script_chars(text, lang) >= need:
+            out.append({"bbox": _tighten(img, [x, y, w, h], text), "dbox": [x, y, w, h],
+                        "text": fix_kana(text) if lang == "ja" else text, "conf": round(float(r.scores[0]), 3)})
+    return out
+
+
+def read_screen(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> list[dict]:
+    """A whole screen: its lines, and the faint ones the detector misses at first."""
+    lines = read_lines(img, lang, min_score)
+    if min(img.shape[:2]) >= 400:
+        lines = _rows(lines + faint_lines(img, lang, lines))
     return lines
 
 

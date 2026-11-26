@@ -1223,3 +1223,27 @@ def test_a_title_read_differently_each_look_does_not_reread_the_screen_forever()
                         start_screen=lambda *a, **k: started.append(k))
     Controller.on_screen_more(m, 5, ["真紅"])
     assert m.screen_tried == ["真紅"] and m.screen_more_n == 1 and started[-1]["more"] is True
+
+
+def test_auto_mode_backs_off_on_a_slowly_changing_scene():
+    """Standing in the world where nothing is to be read: a scene that changes slowly (light, water, an idle
+    character) had auto mode read the whole screen every 0.75 s for many minutes. Only a sudden change (another
+    screen, the camera turned) ends the longer and longer wait."""
+    from collections import deque
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+    from gamelens.watcher import ScreenCalm
+
+    rng = np.random.default_rng(3)
+    base = rng.integers(40, 200, (270, 480, 3)).astype(np.float32)
+    c = SimpleNamespace(auto_prev=None, auto_calm=ScreenCalm(), auto_thumbs=deque(), auto_empties=3, auto_still_since=0.0,
+                        screen_busy=True, screen_ref=None, health=True, auto_done=None)
+    now = 0.0
+    for i in range(60):  # 6 s of a picture brightening slowly
+        now += 0.1
+        Controller.auto_screen_tick(c, np.clip(base + 0.4 * i, 0, 255).astype(np.uint8), now)
+    assert c.auto_empties == 3
+    now += 0.1
+    Controller.auto_screen_tick(c, (base * 0.3).astype(np.uint8), now)  # a menu darkens the screen
+    assert c.auto_empties == 0

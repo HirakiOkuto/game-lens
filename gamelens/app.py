@@ -191,6 +191,7 @@ class Controller(QObject):
         self.shown_seq: dict[str, int] = {}
         self.region_active = 0.0  # when text in a region last changed
         self.auto_empties = 0  # times in a row that auto mode found nothing to translate
+        self.auto_thumbs: deque = deque()  # (time, thumbnail) of the last half second: a sudden change is another screen
         self.genders: dict[str, str] | None = None  # speaker name -> gender, from the glossary file
         self.held: dict[str, tuple] = {}  # translations that wait for a line to be read once more
         self.readings: dict[str, dict] = {}  # what was read last in each region
@@ -1005,7 +1006,8 @@ class Controller(QObject):
         speaking = self.someone_speaking()
         skip = [region_px(r.rect, frame.shape) for r in self.profile.regions
                 if regions and speaking and (self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text)]
-        self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
+        # (the slow look for small letters on the moving world: not again and again where nothing was found)
+        self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto, not auto or self.auto_empties == 0)
 
     def auto_screen_tick(self, frame: np.ndarray, now: float):
         """Menus and quest lists stand still while gameplay moves: translate the screen once its text has been
@@ -1014,6 +1016,15 @@ class Controller(QObject):
         never still."""
         s = stroke_map(frame, "any")
         self.auto_prev = s
+        # another screen (a menu opening) or the camera turned: the picture changed much within half a second. Only
+        # then does auto mode stop waiting longer and longer after readings that found nothing - a scene that
+        # changes slowly (light, water, someone idling) had it read the whole screen every 0.75 s for many minutes
+        thumb = thumbnail(frame)
+        while self.auto_thumbs and now - self.auto_thumbs[0][0] > 0.5:
+            self.auto_thumbs.popleft()
+        if self.auto_thumbs and float(np.abs(thumb - self.auto_thumbs[0][1]).mean()) > 12:
+            self.auto_empties = 0
+        self.auto_thumbs.append((now, thumb))
         share, woke = self.auto_calm.feed(s)
         # (still: a third of the strokes stand in tiles that have not moved for a while, none of them just moved.
         # Walking or turning the camera moves everything; grass waving under a menu moves only its own tiles)
@@ -1026,8 +1037,6 @@ class Controller(QObject):
             changed = self.auto_calm.differs(self.auto_done, s)  # (in the parts that stand still)
             if changed <= STILL:
                 return  # handled already
-            if changed > 0.6:
-                self.auto_empties = 0  # quite a different screen
         wts = {r.kind: self.watchers[r.id] for r in self.profile.regions}
         settled = {k for k, w in wts.items() if w.settled and not (k == "name" and len(plain_text(w.last_text)) > 10)}
         still = now - max(self.auto_still_since, self.region_active)
@@ -1042,10 +1051,10 @@ class Controller(QObject):
         if not on:
             self.dismiss_screen()
 
-    def job_screen(self, frame: np.ndarray, gen: int, skip: list, auto: bool):
+    def job_screen(self, frame: np.ndarray, gen: int, skip: list, auto: bool, deep: bool = True):
         p = self.profile
         try:
-            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen", frame_h=frame.shape[0])
+            ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen" if deep else "screen-look", frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if gen == self.screen_gen:

@@ -278,7 +278,7 @@ def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], readi
         lines = [l for l in lines if has_source_text(l["text"], profile.src_lang)]
         res = api.translate_lines([{"id": str(i), "src": l["text"], "kind": "ui" if labels else "dialog"}
                                    for i, l in enumerate(lines)], series=profile.series, target=profile.target,
-                                  src_lang=profile.src_lang, engine=profile.engine, allow_cloud=allow_cloud,
+                                  src_lang=profile.src_lang, engine=profile.live_engine or profile.engine, allow_cloud=allow_cloud,
                                   context=[] if labels else context)
         for i, l in enumerate(lines):
             l["id"] = str(i)
@@ -289,7 +289,7 @@ def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], readi
         return {"src": reading["text"], "tl": " / ".join(tls.get(str(i), "") for i in range(len(lines))), "items": items,
                 "engine": res.get("engine", ""), "kind": kind, "cached": bool(res.get("cached"))}
     res = api.translate_lines([{"id": "a", "src": reading["text"], "kind": kind}], series=profile.series,
-                              target=profile.target, src_lang=profile.src_lang, engine=profile.engine,
+                              target=profile.target, src_lang=profile.src_lang, engine=profile.live_engine or profile.engine,
                               allow_cloud=allow_cloud, context=context if kind != "name" else [])
     tl = res["lines"].get("a", "")
     item = region_item(crop, px, reading["lines"], tl, kind, align, profile.font_scale, strokes, ink, sizes)

@@ -34,7 +34,7 @@ if (Get-Command llama -ErrorAction SilentlyContinue) {
 }
 
 Step "4/4 โมเดลแปล"
-Write-Host "game-lens ดาวน์โหลดเองตอนเปิดครั้งแรก: Hy-MT2 7B (4.6 GB) ถ้าการ์ดจอมี 10 GB ขึ้นไป ไม่อย่างนั้นรุ่น 1.8B (1.1 GB)"
+Write-Host "game-lens ดาวน์โหลดเองตอนเปิดครั้งแรก: Index-Translate 9B (5.8 GB) ถ้าการ์ดจอมี 10 GB ขึ้นไป ไม่อย่างนั้น Hy-MT2 1.8B (1.1 GB)"
 
 Write-Host ""
 Write-Host "ติดตั้งเสร็จ — เปิดโปรแกรมด้วย start.bat แล้วกดปุ่ม 'สร้างไอคอนบน Desktop'" -ForegroundColor Green

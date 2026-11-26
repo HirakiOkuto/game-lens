@@ -762,16 +762,30 @@ def test_choosing_another_model_size_in_the_window():
     from gamelens.services import ServerManager
 
     m = ServerManager(ROOT, ROOT / "logs", ROOT / "models", "auto")
-    m.vram, m.hymt, m.hymt_gpu = 8.0, "1.8b", True  # as on an 8 GB card
+    m.vram, m.local, m.hymt, m.hymt_gpu = 8.0, "1.8b", "1.8b", True  # as on an 8 GB card
     assert m.set_hymt("1.8b") is False  # what auto picked already
     assert m.set_hymt("7b") is True and m.hymt == "7b" and m.model_name("hymt").startswith("Hy-MT2 7B")
     assert m.set_hymt("auto") is True and m.hymt == "1.8b"
 
 
 def test_index_translate_is_a_local_engine_that_downloads_itself():
-    from gamelens.profile import ENGINE_BY_KEY, ROOT
-    from gamelens.services import INDEX_FILE, MODELS, ServerManager
+    from gamelens.profile import ROOT
+    from gamelens.services import INDEX_FILE, MODELS, ServerManager, pick_local
 
-    assert "index" in ENGINE_BY_KEY and "index" in MODELS and MODELS["index"][0] == 9944
+    assert "index" in MODELS and MODELS["index"][0] == 9944
     assert INDEX_FILE[0] in " ".join(MODELS["index"][1]) and INDEX_FILE[1].endswith(INDEX_FILE[0])
-    assert ServerManager(ROOT, ROOT / "logs", ROOT / "models").model_name("index") == "Index-Translate 9B"
+    # the default: Index-Translate where it fits next to a game, Hy-MT2 1.8B below that
+    assert pick_local("auto", 16) == ("index", True) and pick_local("auto", 8) == ("1.8b", True)
+    assert pick_local("auto", 0) == ("1.8b", False) and pick_local("7b", 16) == ("7b", True)
+    m = ServerManager(ROOT, ROOT / "logs", ROOT / "models", "auto")
+    m.vram, m.local, m.hymt, m.hymt_gpu = 16.0, "index", "7b", True
+    assert m.engine_for("hymt") == "index" and m.engine_for("deepl") == "deepl"
+    assert m.model_name("index").startswith("Index-Translate 9B")
+    assert m.set_hymt("1.8b") and m.engine_for("hymt") == "hymt" and m.hymt == "1.8b"
+    assert m.set_hymt("index") and m.engine_for("hymt") == "index"
+    from gamelens.profile import Profile
+    p = Profile(engine="hymt")
+    p.live_engine = "index"
+    import dataclasses, json
+    d = dataclasses.asdict(p); d.pop("path"); d.pop("live_engine")
+    assert "live_engine" not in json.dumps(d)

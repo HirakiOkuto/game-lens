@@ -30,7 +30,7 @@ from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
 from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
-from .services import HYMT, MODELS, ServerManager, pick_hymt
+from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
 from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
@@ -140,8 +140,13 @@ class Controller(QObject):
             Profile(name=ppath.stem, series=ppath.stem, path=str(ppath)).save()
         self.profile = Profile.load(ppath)
         self.api = LensClient(self.settings.server, self.settings.resolve(self.settings.token_file))
+        if self.profile.engine == "index":  # chosen in the window before it became a size of the local translator
+            self.profile.engine, self.settings.local_model = "hymt", "index"
+            self.profile.save()
+            self.settings.save()
         self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir),
                                       self.settings.local_model)
+        self.profile.live_engine = self.services.engine_for(self.profile.engine)
         self.pool = ThreadPoolExecutor(8)  # reading and translating several regions at once, status polls, screens
         self.bridge = Bridge()
         self.bridge.region_read.connect(self.on_region_read)
@@ -191,7 +196,8 @@ class Controller(QObject):
         # windows
         self.panel = Panel(self.settings.hotkeys, self.settings.peek_key)
         self.panel.setWindowIcon(app_icon())
-        auto = HYMT[pick_hymt("auto", self.services.vram)[0]][0].replace("Hy-MT2 ", "")
+        pick = pick_local("auto", self.services.vram)[0]
+        auto = "Index-Translate 9B" if pick == "index" else HYMT[pick][0]
         where = f"การ์ดจอ {self.services.vram:.0f} GB" if self.services.vram >= 1 else "ไม่มีการ์ดจอแยก"
         self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
                         self.auto_screen, self.settings.local_model, f"{auto}, {where}")
@@ -275,7 +281,7 @@ class Controller(QObject):
 
     # --- translation system (server + model) ------------------------------------------------------------------
     def start_services(self):
-        engine = self.profile.engine
+        engine = self.profile.live_engine
         threading.Thread(target=self.services.ensure, args=(engine, lambda s, d: self.bridge.server_state.emit(s, d)),
                          daemon=True).start()
 
@@ -336,11 +342,11 @@ class Controller(QObject):
         self.refresh_panel()
 
     def engine_ready(self) -> bool:
-        return bool(self.health and self.health.get(self.profile.engine))
+        return bool(self.health and self.health.get(self.profile.live_engine))
 
     def refresh_panel(self):
-        p, eng = self.profile, self.profile.engine
-        info = ENGINE_BY_KEY[eng]
+        p, eng = self.profile, self.profile.live_engine
+        info = ENGINE_BY_KEY[self.profile.engine]
         # 1. translation system
         svc = self.services
         if self.health and self.health.get(eng):
@@ -387,21 +393,24 @@ class Controller(QObject):
         self.tray.setToolTip("game-lens — " + hint)
 
     def set_model_size(self, size: str):
-        """The size of Hy-MT2 picked in the window: kept in settings.json, and the model is swapped now."""
+        """The local translator's model picked in the window: kept in settings.json, and swapped now."""
         self.settings.local_model = size
         self.settings.save()
         if not self.services.set_hymt(size):
             self.refresh_panel()
             return
-        if self.services.model_up("hymt"):  # still the old one: started outside game-lens (e.g. Llama for Windows)
+        self.profile.live_engine = self.services.engine_for(self.profile.engine)
+        self.shown.clear()
+        if self.services.model_up(self.profile.live_engine):  # still the old one: started outside game-lens (e.g. Llama for Windows)
             self.panel.set_engine_status("โมเดลเดิมยังเปิดอยู่นอก game-lens — ปิดโปรแกรมนั้นก่อน แล้วกด 'เปิด' ที่ขั้น 1",
                                          "warn")
-        elif self.profile.engine == "hymt" and self.settings.auto_start_server:
+        elif self.profile.engine == "hymt" and self.settings.auto_start_server:  # the local translator
             self.start_services()
         self.refresh_panel()
 
     def set_engine(self, key: str):
         self.set_profile(engine=key)
+        self.profile.live_engine = self.services.engine_for(key)
         if key in MODELS and self.settings.auto_start_server:
             self.start_services()
         self.refresh_panel()
@@ -417,7 +426,7 @@ class Controller(QObject):
     def _test_engine(self):
         self.bridge.engine_test.emit({"pending": True})
         try:
-            r = self.api.test_engine(self.profile.engine, self.profile.target)
+            r = self.api.test_engine(self.profile.live_engine, self.profile.target)
             if r.get("ok") and self.profile.engine == "deepl":
                 u = self.api.usage().get("deepl") or {}
                 if "used" in u:
@@ -732,7 +741,7 @@ class Controller(QObject):
         if prev is None or changed_pixels(prev, m) > 0.01 * m.size:
             self.auto_still_since = now
             return
-        if self.screen_busy or self.screen_ref is not None or not self.health:
+        if self.screen_busy or self.screen_ref is not None or not self.health or self.services.state == "starting":
             return
         if self.auto_done is not None:
             changed = changed_pixels(self.auto_done, m)
@@ -764,7 +773,7 @@ class Controller(QObject):
                 return
             groups = paragraphs(lines)
             res = self.api.translate_lines(requests(groups, p.src_lang), series=p.series, target=p.target,
-                                           src_lang=p.src_lang, engine=p.engine, allow_cloud=p.engine in REMOTE,
+                                           src_lang=p.src_lang, engine=p.live_engine or p.engine, allow_cloud=p.engine in REMOTE,
                                            context=[])
             items = screen_items(frame, groups, res["lines"], p.font_scale)
             log.info("screen: %d translated by %s", len(items), res.get("engine"))

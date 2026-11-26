@@ -138,8 +138,9 @@ class Panel(QWidget):
         szl.addWidget(QLabel("รุ่นโมเดล"))
         self.size = QComboBox()
         for label, key in (("อัตโนมัติตามการ์ดจอ", "auto"),
-                           ("7B — แปลดีกว่า • ใช้การ์ดจอ ~5.5 GB • โหลด 4.6 GB", "7b"),
-                           ("1.8B — เร็ว ใช้การ์ดจอ ~2 GB หรือ CPU • แปลด้อยกว่า • โหลด 1.1 GB", "1.8b")):
+                           ("Index-Translate 9B — แปลเป็นธรรมชาติที่สุด • การ์ดจอ ~5.5 GB • โหลด 5.8 GB", "index"),
+                           ("Hy-MT2 7B — การ์ดจอ ~5.5 GB • โหลด 4.6 GB", "7b"),
+                           ("Hy-MT2 1.8B — เร็ว การ์ดจอ ~2 GB หรือ CPU • แปลด้อยกว่า • โหลด 1.1 GB", "1.8b")):
             self.size.addItem(label, key)
         self.size.currentIndexChanged.connect(lambda _: self.model_size_changed.emit(self.size.currentData()))
         szl.addWidget(self.size, 1)

@@ -12,11 +12,9 @@ KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)
                "choice": "ตัวเลือกคำตอบ"}
 # engines the server knows, in the order the user sees them; remote ones send text off this machine
 ENGINE_INFO = [
-    {"key": "hymt", "name": "Hy-MT2 — ในเครื่อง (แนะนำ)",
-     "desc": "เร็ว ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง: 7B (การ์ดจอ 10 GB ขึ้นไป) หรือ 1.8B", "keys": []},
-    {"key": "index", "name": "Index-Translate 9B — ในเครื่อง",
-     "desc": "แปลเป็นธรรมชาติกว่า Hy-MT2 7B ในการทดสอบกับเกม • ฟรี ไม่ต้องใช้เน็ต • ใช้การ์ดจอ ~5.5 GB "
-             "(ควรมี 10 GB ขึ้นไป) • ดาวน์โหลด 5.8 GB ครั้งแรก", "keys": []},
+    {"key": "hymt", "name": "โมเดลแปลในเครื่อง (แนะนำ)",
+     "desc": "ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง: Index-Translate 9B (การ์ดจอ 10 GB ขึ้นไป) "
+             "หรือ Hy-MT2 1.8B", "keys": []},
     {"key": "local", "name": "Gemma 26B — ในเครื่อง",
      "desc": "แปลสวยที่สุดในเครื่อง เข้าใจบริบท • ใช้การ์ดจอมาก อาจทำให้เกมกระตุก", "keys": []},
     {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร",
@@ -66,12 +64,14 @@ class Profile:
     player_gender: str = "neutral"
     regions: list[Region] = field(default_factory=list)
     path: str = ""
+    live_engine: str = field(default="", repr=False, compare=False)  # set while running, never saved (see save)
 
     @classmethod
     def load(cls, path: Path) -> "Profile":
         d = json.loads(Path(path).read_text(encoding="utf-8"))
         d["regions"] = [Region(**r) for r in d.get("regions", [])]
         d.pop("path", None)
+        d.pop("live_engine", None)
         p = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
         p.path = str(path)
         return p
@@ -79,6 +79,7 @@ class Profile:
     def save(self):
         d = asdict(self)
         d.pop("path")
+        d.pop("live_engine")
         Path(self.path).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -91,7 +92,7 @@ class Settings:
     peek_key: str = "F8"  # hold to see the original text (polled, not captured: the game still gets the key)
     context_lines: int = 6
     models_dir: str = "D:/AI/models"  # shared folder with the .gguf translation models
-    local_model: str = "auto"  # Hy-MT2 size: auto (by the graphics card's memory) / 7b / 1.8b
+    local_model: str = "auto"  # the local translator's model: auto (by the graphics card) / index / 7b / 1.8b
     auto_start_server: bool = True  # start the server + local model when game-lens starts
     stop_server_on_exit: bool = True  # ...and stop what we started when it quits
     start_hidden: bool = False  # open only the tray icon once setup is complete

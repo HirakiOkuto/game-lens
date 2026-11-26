@@ -59,12 +59,19 @@ def vram_gb() -> float:
         return 0.0
 
 
-def pick_hymt(setting: str, vram: float) -> tuple[str, bool]:
-    """(size, on the graphics card?) for the setting 'auto' / '7b' / '1.8b' and a card with `vram` GB."""
+def pick_local(setting: str, vram: float) -> tuple[str, bool]:
+    """(model, on the graphics card?) for the setting auto / index / 7b / 1.8b and a card with `vram` GB. auto:
+    Index-Translate 9B where it fits next to a game (it read best in the tests), else Hy-MT2 1.8B."""
     gpu = vram >= SMALL_CARD_GB
-    if setting in HYMT:
+    if setting in HYMT or setting == "index":
         return setting, gpu
-    return ("7b" if vram >= BIG_CARD_GB else "1.8b"), gpu
+    return ("index" if vram >= BIG_CARD_GB else "1.8b"), gpu
+
+
+def pick_hymt(setting: str, vram: float) -> tuple[str, bool]:
+    """(Hy-MT2 size, on the graphics card?): the size to use when the engine is Hy-MT2 itself."""
+    model, gpu = pick_local(setting, vram)
+    return (model if model in HYMT else "7b" if vram >= BIG_CARD_GB else "1.8b"), gpu
 
 
 def port_up(port: int, path: str = "/health") -> bool:
@@ -78,6 +85,7 @@ class ServerManager:
     def __init__(self, root: Path, log_dir: Path, models_dir: Path | None = None, hymt_size: str = "auto"):
         self.root = Path(root).resolve()
         self.vram = vram_gb()
+        self.local = pick_local(hymt_size, self.vram)[0]  # what the local translator runs: index / 7b / 1.8b
         self.hymt, self.hymt_gpu = pick_hymt(hymt_size, self.vram)
         self.models = Path(models_dir or self.root / "models")  # folder with the .gguf translation models
         self.logs = Path(log_dir)
@@ -121,20 +129,28 @@ class ServerManager:
     def set_hymt(self, setting: str) -> bool:
         """Choose the Hy-MT2 size again (auto / 7b / 1.8b). True when that changes which model runs; one this
         process started is stopped, so that the next ensure() starts (and if need be downloads) the other."""
-        new = pick_hymt(setting, self.vram)
-        if new == (self.hymt, self.hymt_gpu):
+        new, local = pick_hymt(setting, self.vram), pick_local(setting, self.vram)[0]
+        if new == (self.hymt, self.hymt_gpu) and local == self.local:
             return False
-        self.hymt, self.hymt_gpu = new
-        if "hymt" in self.procs:
+        if new != (self.hymt, self.hymt_gpu) and "hymt" in self.procs:
             self.stop("hymt")
+        if local != self.local and "index" in self.procs:
+            self.stop("index")
+        self.hymt, self.hymt_gpu = new
+        self.local = local
         return True
+
+    def engine_for(self, engine: str) -> str:
+        """The engine the server is asked for: the local translator ("hymt" in the profile) is Index-Translate when
+        that is the model picked for it."""
+        return "index" if engine in ("hymt", "index") and self.local == "index" else engine
 
     def model_name(self, engine: str) -> str:
         """The model this engine runs here, as the user sees it ("Hy-MT2 1.8B (การ์ดจอ 8 GB)")."""
-        if engine != "hymt":
+        if engine not in ("hymt", "index"):
             return MODEL_NAMES.get(engine, engine)
         where = f"การ์ดจอ {self.vram:.0f} GB" if self.hymt_gpu else "ใช้ CPU เพราะไม่มีการ์ดจอแยก"
-        return f"{HYMT[self.hymt][0]} ({where})"
+        return f"{MODEL_NAMES['index'] if engine == 'index' else HYMT[self.hymt][0]} ({where})"
 
     def download_model(self, engine: str, say) -> bool:
         """Fetch the engine's model file if it is missing (resumes a broken download). say(text) reports progress."""

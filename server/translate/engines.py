@@ -433,20 +433,35 @@ class HyMtEngine:
         terms = glossary_terms(glossary)
         history = [(c["src"], c["tl"]) for c in context if c.get("src") and c.get("tl")]
         kinds = kinds or [""] * len(texts)
-        out = []
-        for text, kind in zip(texts, kinds):
-            used = terms_in_text(text, terms)
-            seen = [] if kind == "ui" else history
-            tl = echo_guard(self._ask(self._prompt(text, seen, used, target, style)), text, seen)
-            if not tl and seen:  # it repeated an earlier line: ask again without them
-                tl = self._ask(self._prompt(text, [], used, target, style))
-            if tl and any(b not in tl for _, b in used):
-                # a name came out transliterated: once more with stand-ins (these lose some meaning, so only now)
-                tl = self._with_slots(text, seen, used, target, style) or tl
-            out.append(tl)
-            if tl and kind != "ui":
-                history.append((text, tl))
+        out = [""] * len(texts)
+        # menu labels need no context: several at a time (llama.cpp serves 4 requests at once: a screen of 20 labels
+        # in ~3 s instead of ~7.5 s)
+        alone = [i for i, k in enumerate(kinds) if k == "ui"]
+        if alone:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(min(self.PARALLEL, len(alone))) as pool:
+                for i, tl in zip(alone, pool.map(lambda i: self._one(texts[i], [], terms, target, style), alone)):
+                    out[i] = tl
+        for i, text in enumerate(texts):  # dialogue: in order, each line with the ones before it
+            if kinds[i] == "ui":
+                continue
+            out[i] = self._one(text, history, terms, target, style)
+            if out[i]:
+                history.append((text, out[i]))
         return out
+
+    PARALLEL = 4  # llama.cpp's server slots (its default)
+
+    def _one(self, text: str, seen: list[tuple[str, str]], terms, target: str, style: str) -> str:
+        used = terms_in_text(text, terms)
+        tl = echo_guard(self._ask(self._prompt(text, seen, used, target, style)), text, seen)
+        if not tl and seen:  # it repeated an earlier line: ask again without them
+            tl = self._ask(self._prompt(text, [], used, target, style))
+        if tl and any(b not in tl for _, b in used):
+            # a name came out transliterated: once more with stand-ins (these lose some meaning, so only now)
+            tl = self._with_slots(text, seen, used, target, style) or tl
+        return tl
 
 
 class IndexTranslateEngine(HyMtEngine):

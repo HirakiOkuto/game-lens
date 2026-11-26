@@ -5,6 +5,7 @@ PP-OCRv6 covers Chinese and Latin-script languages; PP-OCRv5 adds Korean, Thai, 
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import threading
@@ -12,6 +13,8 @@ import threading
 import cv2
 import numpy as np
 from PIL import Image
+
+log = logging.getLogger("uvicorn.error")  # (the server log shows what uvicorn logs)
 
 _rapid: dict[tuple[str, str], object] = {}
 _lock = threading.Lock()
@@ -48,10 +51,12 @@ def _get_rapid(version: str, rec_lang: str):
             from rapidocr import LangDet, LangRec, ModelType, OCRVersion, RapidOCR
 
             v5 = version == "PP-OCRv5"
-            _rapid[key] = RapidOCR(params={
+            params = {
                 "Global.log_level": "warning",
                 "Global.use_cls": False,  # game text is upright
-                "EngineConfig.onnxruntime.use_cuda": os.environ.get("OCR_CUDA") == "1",  # CPU by default: ~0.2 s a box
+                # on the graphics card through DirectML (any DirectX 12 card): a whole screen in ~0.3 s instead of
+                # ~2 s, read the same. OCR_GPU=0 keeps it on the processor.
+                "EngineConfig.onnxruntime.use_dml": os.environ.get("OCR_GPU", "1") != "0",
                 # 4 threads read as fast as all of them and leave the rest of the CPU to the game
                 "EngineConfig.onnxruntime.intra_op_num_threads": int(os.environ.get("OCR_THREADS", "4")),
                 # read at the picture's own size: RapidOCR's default blows a wide dialogue strip up several times,
@@ -65,8 +70,29 @@ def _get_rapid(version: str, rec_lang: str):
                 "Rec.lang_type": LangRec(rec_lang),
                 # the medium recogniser tells voiced kana apart (しっぽ / しっほ, まず / ます) where small does not
                 "Rec.model_type": ModelType.MOBILE if v5 else ModelType.MEDIUM,
-            })
+            }
+            # the models load on first use: read a small picture now, so a graphics driver DirectML cannot use
+            # shows here (then the processor reads)
+            probe = np.full((48, 240, 3), 255, np.uint8)
+            cv2.putText(probe, "OCR 123", (10, 34), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 0), 2)
+            try:
+                engine = RapidOCR(params=params)
+                engine(probe)
+            except Exception as e:  # noqa: BLE001
+                log.warning("text reader on the graphics card failed (%s); using the processor", e)
+                engine = RapidOCR(params={**params, "EngineConfig.onnxruntime.use_dml": False})
+                engine(probe)
+            _rapid[key] = engine
+            log.info("text reader %s/%s on %s", version, rec_lang, _provider(engine))
         return _rapid[key]
+
+
+def _provider(engine) -> str:
+    """Which device the text reader runs on (for the log)."""
+    try:
+        return engine.text_det.session.session.get_providers()[0]
+    except Exception:  # noqa: BLE001 - rapidocr's insides may change; this is only for the log
+        return "?"
 
 
 def _drop_ruby(lines: list[dict]) -> list[dict]:

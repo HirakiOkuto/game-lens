@@ -648,7 +648,7 @@ class Controller(QObject):
             e = self.history.add(payload["kind"], payload["src"], payload["tl"], payload["engine"])
             if self.history_win:
                 self.history_win.append(e)
-            if payload["kind"] != "name":
+            if payload["kind"] not in ("name", "choice"):
                 remember(self.context, payload["src"], payload["tl"])
 
     # --- whole-screen mode (menus, item descriptions) ---------------------------------------------------------

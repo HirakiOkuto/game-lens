@@ -689,3 +689,21 @@ def test_auto_screen_gives_way_to_dialogue():
     assert auto_pause({"name", "dialog"}, 0) >= 5  # someone is speaking
     assert 1 < auto_pause({"dialog"}, 0) < 5
     assert auto_pause(set(), 1) < auto_pause(set(), 3) <= 8 and auto_pause(set(), 9) <= 8
+
+
+def test_choices_are_laid_over_their_own_buttons():
+    from gamelens.screen import choice_items, refresh_patch
+
+    pic = np.full((200, 400, 3), (200, 180, 170), np.uint8)
+    lines = []
+    for i, (y, text) in enumerate(((40, "Lend me a hand?"), (110, "Blast magic?"))):
+        cv2.rectangle(pic, (20, y - 10), (380, y + 34), (240, 238, 236), -1)
+        cv2.putText(pic, text, (60, y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (110, 100, 90), 2, cv2.LINE_AA)
+        lines.append({"id": str(i), "bbox": [56, y, 210, 28], "text": text})
+    items = choice_items(pic, (500, 300, 400, 200), lines, {"0": "ช่วยหน่อยได้ไหม", "1": "เวทระเบิดเหรอ"}, 1.0)
+    assert [it.text for it in items] == ["ช่วยหน่อยได้ไหม", "เวทระเบิดเหรอ"]
+    assert all(it.rect[0] >= 500 and it.rect[1] >= 300 for it in items)  # placed in the game's window, not the crop
+    assert items[0].rect[1] < items[1].rect[1] and items[0].patch_pos == (500, 300)
+    same = items[0].patch
+    refresh_patch(items[0], pic)
+    assert items[0].patch is same  # nothing moved behind the buttons

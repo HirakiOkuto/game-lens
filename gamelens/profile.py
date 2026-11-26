@@ -7,8 +7,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-KINDS = ("dialog", "name", "subtitle")
-KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)", "name": "ชื่อผู้พูด", "subtitle": "ซับระหว่างเล่น"}
+KINDS = ("dialog", "name", "subtitle", "choice")
+KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)", "name": "ชื่อผู้พูด", "subtitle": "ซับระหว่างเล่น",
+               "choice": "ตัวเลือกคำตอบ"}
 # engines the server knows, in the order the user sees them; remote ones send text off this machine
 ENGINE_INFO = [
     {"key": "hymt", "name": "Hy-MT2 7B — ในเครื่อง (แนะนำ)",

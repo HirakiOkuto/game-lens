@@ -234,9 +234,36 @@ def ocr_region(api, crop: np.ndarray, kind: str, align: str, profile, frame_h: i
     return {"text": text, "lines": lines, "ms": ocr.get("ms", 0)}
 
 
+def choice_items(crop: np.ndarray, px: tuple[int, int, int, int], lines: list[dict], translations: dict[str, str],
+                 font_scale: float) -> list[Item]:
+    """Overlay items for a list of answers to pick from: each one is laid over its own button, like a menu."""
+    groups = [[l] for l in sorted(lines, key=lambda l: l["bbox"][1])]
+    items = screen_items(crop, groups, translations, font_scale)
+    for it in items:
+        x, y, w, h = it.rect
+        it.rect = (x + px[0], y + px[1], w, h)
+    if items and items[0].patch is not None:
+        items[0].patch_pos = (px[0], px[1])
+        # buttons are often see-through: the patch follows the scene behind them, like a region's over the scene
+        items[0]._lines = [a for g in groups if (a := analyze_line(crop, g[0]["bbox"])) is not None]
+        items[0]._live, items[0]._seen = True, crop
+    return items
+
+
 def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], reading: dict, kind: str, align: str, ink: str,
                      profile, context: list[dict], strokes, sizes: TextSize, allow_cloud: bool) -> dict:
     """Translate a complete reading and lay the translation out. Worker thread; the replay tool uses it too."""
+    if kind == "choice":
+        lines = [l for l in reading["lines"] if has_source_text(l["text"], profile.src_lang)]
+        res = api.translate_lines([{"id": str(i), "src": l["text"], "kind": "dialog"} for i, l in enumerate(lines)],
+                                  series=profile.series, target=profile.target, src_lang=profile.src_lang,
+                                  engine=profile.engine, allow_cloud=allow_cloud, context=context)
+        for i, l in enumerate(lines):
+            l["id"] = str(i)
+        tls = res["lines"]
+        items = choice_items(crop, px, lines, tls, profile.font_scale)
+        return {"src": reading["text"], "tl": " / ".join(tls.get(str(i), "") for i in range(len(lines))), "items": items,
+                "engine": res.get("engine", ""), "kind": kind, "cached": bool(res.get("cached"))}
     res = api.translate_lines([{"id": "a", "src": reading["text"], "kind": kind}], series=profile.series,
                               target=profile.target, src_lang=profile.src_lang, engine=profile.engine,
                               allow_cloud=allow_cloud, context=context if kind != "name" else [])

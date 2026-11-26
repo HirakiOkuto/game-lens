@@ -185,7 +185,7 @@ class Replay:
                         it.born -= 10
                     if pend["items"]:
                         self.ov.items[r["id"]] = pend["items"]
-                    if r["kind"] != "name" and pend["tl"]:
+                    if r["kind"] not in ("name", "choice") and pend["tl"]:
                         remember(context, pend["src"], pend["tl"])
                     self.gone(s, t)
                     s["on"] = (t, pend["src"], r["kind"])

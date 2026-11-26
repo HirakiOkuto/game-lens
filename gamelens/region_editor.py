@@ -2,7 +2,7 @@
 
 game-lens first finds the text on screen and outlines it (dashed); one click on the dialogue makes a region.
 Drag on empty space for a region by hand; drag a region to move it, its corner to resize it.
-1 / 2 / 3 set the kind of the selected region, Delete removes it, Enter saves, Esc cancels."""
+1 / 2 / 3 / 4 set the kind of the selected region, Delete removes it, Enter saves, Esc cancels."""
 from __future__ import annotations
 
 import threading
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton, QWidget
 
 from .profile import KIND_LABELS, KINDS, Region
 
-COLORS = {"dialog": "#4fc3f7", "name": "#ffb74d", "subtitle": "#aed581"}
+COLORS = {"dialog": "#4fc3f7", "name": "#ffb74d", "subtitle": "#aed581", "choice": "#f48fb1"}
 HANDLE = 14
 
 
@@ -316,7 +316,7 @@ class RegionEditor(QWidget):
             a = m.addAction(f"{i}  {KIND_LABELS[k]}")
             a.setCheckable(True)
             a.setChecked(r.kind == k)
-            a.triggered.connect(lambda _=False, k=k: setattr(r, "kind", k))
+            a.triggered.connect(lambda _=False, k=k: self._set_kind(r, k))
         m.addSeparator()
         ink = m.addMenu("สีตัวอักษรในกรอบ")
         for v, label in (("light", "สว่าง (ขาวบนพื้นเข้ม)"), ("dark", "เข้ม (ดำบนพื้นสว่าง)"), ("any", "ไม่แน่นอน / หลายสี")):
@@ -348,9 +348,15 @@ class RegionEditor(QWidget):
             self._cancel()
         elif k in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected:
             self._delete(self.selected)
-        elif self.selected and Qt.Key.Key_1 <= k <= Qt.Key.Key_3:
-            self.selected.kind = KINDS[k - Qt.Key.Key_1]
+        elif self.selected and Qt.Key.Key_1 <= k < Qt.Key.Key_1 + len(KINDS):
+            self._set_kind(self.selected, KINDS[k - Qt.Key.Key_1])
             self.update()
+
+    @staticmethod
+    def _set_kind(r: Region, kind: str):
+        r.kind = kind
+        if kind in ("choice", "subtitle"):
+            r.ink = "any"  # choices are often dark text on light buttons
 
     def _save(self):
         self.saved.emit(self.regions)

@@ -22,6 +22,9 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from public import MARKER, MARKER_TEXT, has_key, package_licenses, public_file  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "game-lens"
 APP_LEAVE_OUT = ("tests/", "server/tests/", "tools/", "experiments/", "setup.ps1", "setup.bat", "start.ps1", "start.bat")
@@ -114,7 +117,7 @@ def qt_unused(rel: str) -> bool:
                                     "canbus", "assetimporters", "renderplugins"))
 
 
-def build_app() -> None:
+def build_app(personal: bool) -> None:
     raw = subprocess.run(["git", "archive", "--format=zip", "HEAD"], cwd=ROOT, capture_output=True, check=True).stdout
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         for info in z.infolist():
@@ -126,9 +129,13 @@ def build_app() -> None:
                 s = json.loads(data)
                 s["models_dir"] = "models"  # the app's own folder, not this computer's shared one
                 data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
+            if not personal:
+                data = public_file(name, data)
             t = OUT / name
             t.parent.mkdir(parents=True, exist_ok=True)
             t.write_bytes(data)
+    if not personal:
+        (OUT / MARKER).write_bytes(MARKER_TEXT)
     (OUT / "models").mkdir(exist_ok=True)
     (OUT / "models" / "วางไฟล์โมเดล .gguf ไว้ที่นี่.txt").write_text(
         "game-lens ดาวน์โหลดโมเดลแปลภาษามาไว้ที่นี่เองเมื่อเปิดใช้ครั้งแรก\r\n", encoding="utf-8")
@@ -140,6 +147,10 @@ def build_python() -> None:
     site = Path(sys.prefix) / "Lib" / "site-packages"  # this .venv
     dst = OUT / "python" / "Lib" / "site-packages"
     copy_tree(site, dst, lambda rel: leave_out(rel, SITE_LEAVE_OUT) or "/__pycache__/" in f"/{rel}" or qt_unused(rel))
+    # the licenses that go along: Python's own, and a list of every package's (their texts are in their dist-info)
+    (OUT / "licenses").mkdir(exist_ok=True)
+    shutil.copyfile(base / "LICENSE.txt", OUT / "licenses" / "Python-LICENSE.txt")
+    (OUT / "licenses" / "python-packages.txt").write_bytes(package_licenses(dst))
 
 
 def build_llama(src_zip: Path) -> None:
@@ -174,7 +185,11 @@ def readme() -> None:
         "3. ตั้งเกมเป็นแบบ Borderless หรือ Windowed แล้วดำเนินการตาม 3 ขั้นตอนในหน้าต่าง game-lens\r\n\r\n"
         "หน้าต่างของโปรแกรมเปลี่ยนเป็นภาษาไทยได้ที่มุมขวาบน (🌐)\r\n"
         "แก้คำแปลที่ผิดได้เอง: กด F7 แล้วกด ✎ ท้ายคำแปล • เมนูหน้าใดไม่ถูกแปล กด F9\r\n"
-        "รายละเอียดทั้งหมดอยู่ใน README.md\r\n", encoding="utf-8")
+        "รายละเอียดทั้งหมดอยู่ใน README.md\r\n\r\n"
+        "⚠️ game-lens ไม่ใช่โปรแกรมของผู้พัฒนาเกมใด และไม่เกี่ยวข้องกับผู้พัฒนาเกม แม้ไม่แตะต้องตัวเกม แต่หน้าต่างคำแปลที่วางทับเกม\r\n"
+        "อาจถูกระบบกันโกงบางระบบมองว่าเป็นโปรแกรมภายนอก และข้อตกลงของบางเกมห้ามใช้โปรแกรมภายนอก ไม่มีการรับประกันว่า\r\n"
+        "บัญชีเกมจะปลอดภัย ผู้ใช้รับความเสี่ยงเอง ควรอ่านข้อตกลงการใช้งานของเกมก่อนใช้\r\n"
+        "ซอฟต์แวร์และสัญญาอนุญาตของผู้อื่นที่ใช้: THIRD_PARTY_NOTICES.md และโฟลเดอร์ licenses\r\n", encoding="utf-8")
 
 
 def main():
@@ -182,23 +197,27 @@ def main():
     ap.add_argument("--llama", required=True, help="llama.cpp Windows Vulkan x64 release zip")
     ap.add_argument("--icon", default=str(ROOT / "logs" / "game-lens-icon.ico"))
     ap.add_argument("--no-zip", action="store_true")
+    ap.add_argument("--personal", action="store_true", help="keep \"Google free\" (Chrome's key): for your own computers only")
     a = ap.parse_args()
     if Path(sys.prefix).name != ".venv":
         sys.exit("run it with the .venv's python (its packages are what is copied)")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
-    build_app()
+    build_app(a.personal)
     build_python()
     build_llama(Path(a.llama))
     build_launcher(Path(a.icon))
     readme()
     for bad in ("token.txt", "keys.json", "cache.sqlite"):
         assert not list(OUT.rglob(bad)), bad
+    if not a.personal:
+        assert not has_key((OUT / "server" / "translate" / "web_engines.py").read_bytes()), "Chrome's key left in"
     size = sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file())
     print(f"{OUT}  {size / 1e6:.0f} MB")
     if not a.no_zip:
-        out = ROOT / "dist" / f"game-lens-portable-{date.today():%Y%m%d}.zip"
+        kind = "portable-personal" if a.personal else "portable"  # (a personal one is not to be passed on)
+        out = ROOT / "dist" / f"game-lens-{kind}-{date.today():%Y%m%d}.zip"
         out.parent.mkdir(exist_ok=True)
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
             for p in sorted(OUT.rglob("*")):

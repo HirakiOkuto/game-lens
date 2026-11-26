@@ -663,3 +663,12 @@ def test_index_translate_gets_names_as_a_hard_constraint(monkeypatch):
     assert "翻译成泰语" in p and "【源文】\nミイティ、行こう" in p and "ミイティ -> Mitty" in p and "おはよう => อรุณสวัสดิ์" in p
     assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False} and sent[0]["temperature"] == 0
     assert engines.engine_order("index", False)[0] == ["index", "hymt", "local"]
+
+
+def test_google_free_is_no_engine_without_its_key(monkeypatch):
+    """A build given to others has Chrome's key taken out: the engine says it is not there instead of trying."""
+    monkeypatch.setattr(web_engines.GoogleFreeEngine, "KEY", "")
+    e = web_engines.GoogleFreeEngine(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[["x"]])))
+    assert e.available() is False
+    with pytest.raises(engines.EngineError):
+        e.translate_page(["こんにちは"], "ja", "th", [], {})

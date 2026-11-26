@@ -180,7 +180,7 @@ class GoogleFreeEngine:
         self.http = httpx.Client(timeout=15, transport=transport, headers={"User-Agent": self.UA})
 
     def available(self) -> bool:
-        return True
+        return bool(self.KEY)  # (a build given to others has Chrome's key taken out: no engine then)
 
     def _lang(self, code: str) -> str:
         c = (code or "").lower()
@@ -218,6 +218,8 @@ class GoogleFreeEngine:
 
     def translate_page(self, texts: list[str], src: str, target: str, context: list[dict], glossary: dict,
                        style: str = "manga") -> list[str]:
+        if not self.KEY:
+            raise EngineError("Google (free) is not part of this build")
         terms = terms_in(texts, glossary)
         try:
             out = self._html([lock(t, terms, "html") for t in texts], src, target)

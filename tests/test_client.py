@@ -1277,3 +1277,33 @@ def test_auto_mode_reads_a_still_empty_world_only_now_and_then():
         c.now += 0.1
         Controller.auto_screen_tick(c, frame, c.now)
     assert 4 <= len(reads) <= 12, len(reads)
+
+
+def test_a_build_to_give_away_leaves_out_chromes_key():
+    """A public build: Chrome's key taken out of the source, "Google free" hidden in the app, the licenses listed."""
+    import importlib
+    import sys as _sys
+    from pathlib import Path
+
+    _sys.path.insert(0, str(Path("tools").resolve()))
+    import public
+
+    src = Path("server/translate/web_engines.py").read_bytes()
+    out = public.public_file("server/translate/web_engines.py", src)
+    assert public.has_key(src) and not public.has_key(out) and b'KEY = ""' in out
+    assert public.public_file("gamelens/app.py", b"x") == b"x"
+    import gamelens.profile as prof
+
+    marker = Path(prof.__file__).resolve().parent.parent / public.MARKER
+    assert not marker.exists()
+    try:
+        marker.write_bytes(public.MARKER_TEXT)
+        importlib.reload(prof)
+        assert prof.PUBLIC_BUILD and "google_free" not in prof.ENGINE_BY_KEY and "hymt" in prof.ENGINE_BY_KEY
+    finally:
+        marker.unlink()
+        importlib.reload(prof)
+    assert "google_free" in prof.ENGINE_BY_KEY
+    site = Path(_sys.prefix) / "Lib" / "site-packages"
+    listed = public.package_licenses(site).decode()
+    assert "PySide6" in listed and "LGPL-3.0" in listed and "numpy" in listed

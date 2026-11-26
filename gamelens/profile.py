@@ -30,6 +30,11 @@ ENGINE_INFO = [
     {"key": "cloud", "name": "Claude", "desc": "Best translations • paid per use",
      "keys": [("ANTHROPIC_API_KEY", "API key")], "signup": "https://console.anthropic.com/"},
 ]
+# a build given to others (tools/public.py) leaves "Google free" out: it borrows the key built into Chrome, which is
+# for one's own use at most, not for handing out
+PUBLIC_BUILD = (Path(__file__).resolve().parent.parent / "PUBLIC_BUILD").exists()
+if PUBLIC_BUILD:
+    ENGINE_INFO = [e for e in ENGINE_INFO if e["key"] != "google_free"]
 ENGINE_BY_KEY = {e["key"]: e for e in ENGINE_INFO}
 ENGINES = {e["key"]: e["name"] for e in ENGINE_INFO}
 REMOTE = {"google_free", "google", "deepl", "azure", "cloud"}
@@ -138,6 +143,7 @@ class Settings:
     start_hidden: bool = False  # open only the tray icon once setup is complete
     toasts: bool = True  # short status messages on the game screen
     told_tray: bool = False  # told once that closing the window leaves game-lens running in the tray
+    risk_ok: bool = False  # the player read, on the first start, that a game may not allow tools like this
     auto_screen: bool = False  # translate the whole screen by itself when it stands still (menus, quests)
     ui_lang: str = "en"  # the app's own language: en / th
     english_keys: bool = True  # switch the keyboard to English while the game has the focus (games draw the key

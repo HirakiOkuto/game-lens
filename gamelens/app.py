@@ -19,7 +19,7 @@ import numpy as np
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import win32
 from .api import LensClient, LensError
@@ -1389,6 +1389,42 @@ def load_fonts():
             log.warning("font %s could not be loaded", f.name)
 
 
+RISK_TEXT = (
+    "<b>ก่อนใช้ game-lens</b><ul>"
+    "<li>game-lens ไม่ใช่โปรแกรมของผู้พัฒนาเกมใด และไม่เกี่ยวข้องกับผู้พัฒนาเกม</li>"
+    "<li>โปรแกรมไม่แก้ไฟล์เกม ไม่อ่านหน่วยความจำ และไม่ฉีดโค้ดเข้าเกม แต่วางหน้าต่างคำแปลทับหน้าต่างเกม "
+    "ระบบกันโกงบางระบบอาจมองหน้าต่างแบบนี้ว่าเป็นโปรแกรมภายนอก และข้อตกลงการใช้งานของบางเกมห้ามใช้โปรแกรมภายนอก</li>"
+    "<li>ไม่มีการรับประกันว่าบัญชีเกมจะปลอดภัย ผู้ใช้รับความเสี่ยงเอง ควรอ่านข้อตกลงการใช้งานของเกมก่อนใช้</li></ul>"
+    "<b>Before you use game-lens</b><ul>"
+    "<li>game-lens is not made by, or connected with, any game's developer.</li>"
+    "<li>It does not change game files, read the game's memory or inject code into the game, but it does put a window "
+    "with the translations over the game. Some anti-cheat systems may treat such a window as an outside program, and "
+    "some games' terms of service forbid outside programs.</li>"
+    "<li>Nothing guarantees that your game account is safe: you use it at your own risk. Read the game's terms "
+    "first.</li></ul>")
+
+
+def accept_risk() -> bool:
+    """The first start: what a game may think of a tool like this, said plainly; no further unless the player agrees."""
+    settings = Settings.load()
+    if settings.risk_ok or os.environ.get("GAMELENS_INSTANCE"):  # (a second instance for tests)
+        return True
+    box = QMessageBox()
+    box.setWindowTitle("game-lens")
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setTextFormat(Qt.TextFormat.RichText)
+    box.setText(RISK_TEXT)
+    ok = box.addButton("เข้าใจแล้ว ใช้ต่อ / I understand", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("ออก / Quit", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(ok)
+    box.exec()
+    if box.clickedButton() is not ok:
+        return False
+    settings.risk_ok = True
+    settings.save()
+    return True
+
+
 def main():
     (ROOT / "logs").mkdir(exist_ok=True)
     logging.basicConfig(filename=ROOT / "logs" / "gamelens.log", level=logging.INFO, encoding="utf-8",
@@ -1416,6 +1452,8 @@ def main():
     server = QLocalServer()
     server.listen(INSTANCE_KEY)
     app.setStyleSheet(QSS)
+    if not accept_risk():
+        return
     ctl = Controller(app)
 
     def on_connection():

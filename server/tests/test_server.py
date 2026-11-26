@@ -103,13 +103,14 @@ def test_web_engine_failure_falls_back_to_hymt_then_local(monkeypatch):
     local = FakeEngine([{"lines": [{"id": "a", "tl": "ก"}]}])
     monkeypatch.setitem(engines._engines, "local", local)
     monkeypatch.setitem(engines._engines, "hymt", DeadPageEngine())
+    monkeypatch.setitem(engines._engines, "index", DeadPageEngine())
     out, name, m = engines.translate_blocks([{"id": "a", "src": "あ"}], {}, [], "deepl", allow_cloud=True, game=True)
-    assert name == "local" and out == {"a": "ก"} and "quota" in m["errors"][0] and "Hy-MT" in m["errors"][1]
+    assert name == "local" and out == {"a": "ก"} and "quota" in m["errors"][0] and len(m["errors"]) == 3
     monkeypatch.setitem(engines._engines, "hymt", PageEngine())
     out, name, _ = engines.translate_blocks([{"id": "a", "src": "あ"}], {}, [], "deepl", allow_cloud=True, game=True)
     assert name == "hymt" and out == {"a": "hy:あ"}
     assert engines.engine_order("hymt", False)[0] == ["hymt", "local"]
-    assert engines.engine_order("google_free", True)[0] == ["google_free", "hymt", "local"]
+    assert engines.engine_order("google_free", True)[0] == ["google_free", "index", "hymt", "local"]
 
 
 def test_deepl_usage(monkeypatch):
@@ -491,4 +492,4 @@ def test_index_translate_gets_names_as_a_hard_constraint(monkeypatch):
     p = sent[0]["messages"][0]["content"]
     assert "翻译成泰语" in p and "【源文】\nミイティ、行こう" in p and "ミイティ -> Mitty" in p and "おはよう => อรุณสวัสดิ์" in p
     assert sent[0]["chat_template_kwargs"] == {"enable_thinking": False} and sent[0]["temperature"] == 0
-    assert engines.engine_order("index", False)[0] == ["index", "local"]
+    assert engines.engine_order("index", False)[0] == ["index", "hymt", "local"]

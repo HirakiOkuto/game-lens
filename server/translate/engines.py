@@ -555,8 +555,9 @@ def engine_order(pref: str, allow_cloud: bool) -> tuple[list[str], str | None]:
     if pref in REMOTE and not allow_cloud:
         return ["local"], "remote engine not allowed for this site; used the local LLM"
     order = [pref]
-    if pref in REMOTE:
-        order.append("hymt")  # a web engine failing (quota, 429, network): the fast local model first, if it runs
+    if pref in REMOTE or pref == "index":
+        # a web engine failing (quota, 429, network): the local translation models that run, fastest to start first
+        order += [e for e in ("index", "hymt") if e != pref]
     if pref != "local":
         order.append("local")  # ... then the local LLM
     elif allow_cloud:

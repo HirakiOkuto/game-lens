@@ -34,7 +34,7 @@ from .screen import (TextSize, begins, text_marks, text_state, extend_item, line
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
-from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
+from .watcher import TextFollower, auto_pause, changed_pixels, plain_text, stroke_change, goes_on, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
 INSTANCE_KEY = os.environ.get("GAMELENS_INSTANCE", "game-lens-ui")  # one running copy per key (tests use their own)
@@ -131,6 +131,7 @@ def region_px(rect: list[float], shape) -> tuple[int, int, int, int]:
 
 
 LANG_NAMES = dict(GAME_LANGS)
+STILL = 0.35  # share of the screen's strokes in parts that moved, below which its text counts as standing still
 
 
 class Controller(QObject):
@@ -188,6 +189,7 @@ class Controller(QObject):
         self.screen_marks: list = []  # what the translated text looked like (see text_state)
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
+        self.screen_texts: frozenset = frozenset()  # what the last screen translation said
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -710,7 +712,7 @@ class Controller(QObject):
         what = wt.on_read(got["text"] if got else "", now)
         if got:
             self.readings[rid] = got
-        if what or (got and not wt.settled):
+        if what:
             self.region_active = now  # something is being said: no time to read the whole screen
         if what == "hide":
             self.overlay.clear(rid)
@@ -802,7 +804,7 @@ class Controller(QObject):
         self.screen_gen += 1
         self.screen_ref = ref
         self.screen_frame, self.screen_marks = frame, []
-        self.auto_done = ref  # this picture is handled: auto mode will not start on it again
+        self.auto_done = stroke_map(frame, "any")  # this text is handled: auto mode will not start on it again
         self.overlay.set_pending("screen", (frame.shape[1] // 2 + 21, 60))
         if not auto:
             self.toast("กำลังแปลทั้งหน้าจอ… (F9 / Esc ปิด)", 2)
@@ -812,26 +814,29 @@ class Controller(QObject):
         self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
 
     def auto_screen_tick(self, frame: np.ndarray, now: float):
-        """Menus and quest lists stand still while gameplay moves: translate the screen once it has been still
-        for a moment and is not the picture we already handled."""
-        m = ink_map(frame, "any")
-        prev, self.auto_prev = self.auto_prev, m
-        if prev is None or changed_pixels(prev, m) > 0.01 * m.size:
+        """Menus and quest lists stand still while gameplay moves: translate the screen once its text has been
+        still for a moment and it is not the picture we already handled. The text, not the whole picture: a menu
+        often has a character moving in it. Text is thin strokes that stay put; the 3D world's are everywhere and
+        never still."""
+        s = stroke_map(frame, "any")
+        prev, self.auto_prev = self.auto_prev, s
+        if prev is None or prev.shape != s.shape or stroke_change(prev, s) > STILL:
             self.auto_still_since = now
             return
         if self.screen_busy or self.screen_ref is not None or not self.health or self.services.state == "starting":
             return
-        if self.auto_done is not None:
-            changed = changed_pixels(self.auto_done, m)
-            if changed <= 0.03 * m.size:
-                return
-            if changed > 0.25 * m.size:
+        if self.auto_done is not None and self.auto_done.shape == s.shape:
+            changed = stroke_change(self.auto_done, s)
+            if changed <= STILL:
+                return  # handled already
+            if changed > 0.6:
                 self.auto_empties = 0  # quite a different screen
         wts = {r.kind: self.watchers[r.id] for r in self.profile.regions}
+        settled = {k for k, w in wts.items() if w.settled and not (k == "name" and len(plain_text(w.last_text)) > 10)}
         still = now - max(self.auto_still_since, self.region_active)
-        if still < auto_pause({k for k, w in wts.items() if w.settled}, self.auto_empties) or any(w.reading for w in wts.values()):
+        if still < auto_pause(settled, self.auto_empties) or any(w.reading for w in wts.values()):
             return
-        self.start_screen(frame, m, auto=True)
+        self.start_screen(frame, ink_map(frame, "any"), auto=True)
 
     def set_auto_screen(self, on: bool):
         self.auto_screen = self.settings.auto_screen = on
@@ -871,7 +876,11 @@ class Controller(QObject):
             self.auto_done = None  # not handled after all: auto mode tries again in a while
             self.auto_still_since = time.monotonic() + 2
             return
-        self.auto_empties = 0 if items else self.auto_empties + 1
+        # nothing found, or the same labels as the last time (the HUD while walking): wait longer before trying again
+        texts = frozenset(it.text for it in items) if isinstance(items, list) else frozenset()
+        same = bool(texts) and texts == self.screen_texts and self.screen_auto
+        self.screen_texts = texts or self.screen_texts
+        self.auto_empties = 0 if items and not same else self.auto_empties + 1
         if items is None:  # auto mode found nothing to translate: stay quiet
             self.dismiss_screen()  # (and take away what an earlier reading of this screen put there)
             return

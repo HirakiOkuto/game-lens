@@ -45,6 +45,25 @@ def auto_pause(settled_kinds: set[str], empties: int) -> float:
     return max(need, min(8.0, 2.0 ** empties) if empties else 0.0)
 
 
+def stroke_change(a: np.ndarray, b: np.ndarray, rows: int = 9, cols: int = 16) -> float:
+    """How much of the screen's strokes are in parts of it that changed (0 = all the strokes stand still, 1 = none
+    do). Judged tile by tile, so that a character moving in a menu leaves the menu's text "still", while the 3D
+    world, whose strokes are everywhere, is not."""
+    if a.shape != b.shape:
+        return 1.0
+    h, w = a.shape
+    moved = total = 0
+    for r in range(rows):
+        for c in range(cols):
+            ta = a[r * h // rows : (r + 1) * h // rows, c * w // cols : (c + 1) * w // cols]
+            tb = b[r * h // rows : (r + 1) * h // rows, c * w // cols : (c + 1) * w // cols]
+            n = max(int(ta.sum()), int(tb.sum()))
+            total += n
+            if n and (ta ^ tb).sum() > 0.25 * n:
+                moved += n
+    return moved / max(1, total)
+
+
 def changed_pixels(a: np.ndarray, b: np.ndarray) -> int:
     if a.shape != b.shape:
         return a.size

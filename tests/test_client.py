@@ -849,3 +849,23 @@ def test_screen_text_changed_or_gone():
     tip[38 + 350 - 4 : 38 + 350 + 34, :] = 70  # the tip went (the next one comes)
     assert text_state(tip, marks) == "changed"
     assert text_state(np.full_like(pic, 70), marks) == "gone"  # another screen
+
+
+def test_text_standing_still_while_a_character_moves_counts_as_still():
+    from gamelens.watcher import stroke_change
+
+    rng = np.random.default_rng(5)
+    def frame(shift):
+        pic = np.full((540, 960, 3), (120, 160, 110), np.uint8)
+        cv2.circle(pic, (480, 250 + shift), 90, (235, 235, 230), -1)  # a soft round character bobbing
+        cv2.circle(pic, (470, 240 + shift), 20, (60, 60, 60), 3)
+        for i, t in enumerate(["HP 1217", "ATK 24", "DEF 30", "CRIT 29.9%"]):
+            cv2.putText(pic, t, (300, 400 + 30 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (250, 250, 250), 1, cv2.LINE_AA)
+        return pic
+    a, b = stroke_map(frame(0), "any"), stroke_map(frame(6), "any")
+    from gamelens.app import STILL
+
+    assert stroke_change(a, b) <= STILL  # the menu's text stands still: it can be read
+    grass = cv2.resize(rng.integers(0, 255, (60, 100, 3), np.uint8), (960, 540), interpolation=cv2.INTER_NEAREST)
+    grass2 = cv2.resize(rng.integers(0, 255, (60, 100, 3), np.uint8), (960, 540), interpolation=cv2.INTER_NEAREST)
+    assert stroke_change(stroke_map(grass, "any"), stroke_map(grass2, "any")) > STILL  # the world moving: not still

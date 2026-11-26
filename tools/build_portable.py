@@ -23,7 +23,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "build" / "game-lens"
-APP_LEAVE_OUT = ("tests/", "server/tests/", "tools/", "setup.ps1", "setup.bat", "start.ps1", "start.bat")
+APP_LEAVE_OUT = ("tests/", "server/tests/", "tools/", "experiments/", "setup.ps1", "setup.bat", "start.ps1", "start.bat")
 PY_LEAVE_OUT = ["Doc", "include", "libs", "Scripts", "tcl", "Tools", "Lib/test", "Lib/idlelib", "Lib/tkinter",
                 "Lib/turtledemo", "Lib/site-packages", "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll",
                 "NEWS.txt", "python.pdb"]

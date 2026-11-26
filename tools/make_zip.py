@@ -14,7 +14,7 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LEAVE_OUT = ("tests/", "server/tests/", "tools/make_zip.py")
+LEAVE_OUT = ("tests/", "server/tests/", "tools/make_zip.py", "experiments/")
 
 
 def main():

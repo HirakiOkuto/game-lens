@@ -147,6 +147,9 @@ game-lens เปิดระบบแปลภาษาและโมเดล�
   เลือก **Override for default input method** เป็น English แล้วติ๊ก **Let me use a different input method for each app window**
   จากนั้นปิดและเปิดเกมใหม่
 - **Google ฟรีแจ้ง 429:** ถูกจำกัดการใช้งานชั่วคราว โปรดใช้เครื่องแปลอื่น
+- **ตัวอ่านข้อความใช้การ์ดจอ (DirectML):** อ่านทั้งหน้าจอได้ในราว 0.3–0.5 วินาที หากการ์ดจอใช้ไม่ได้จะเปลี่ยนไปใช้ CPU เอง
+  (บันทึกใน `logs/server.log` ว่า "text reader … on DmlExecutionProvider") หากเกมกระตุกขณะแปลเมนู ตั้งตัวแปรสภาพแวดล้อม
+  `OCR_GPU=0` ก่อนเปิด game-lens เพื่อให้อ่านด้วย CPU
 - **ขอบสีเหลืองรอบหน้าต่างเกม:** เกิดจาก Windows 10 ขณะจับภาพหน้าต่าง ไม่สามารถปิดได้ (Windows 11 ไม่มีขอบนี้)
 - **รายละเอียดข้อผิดพลาด:** `logs/gamelens.log` และ `logs/server.log`
 

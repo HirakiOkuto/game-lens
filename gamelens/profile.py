@@ -8,24 +8,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # languages a game can be in (code for the server, name in the window)
-GAME_LANGS = [("ja", "ญี่ปุ่น"), ("ko", "เกาหลี"), ("zh", "จีนตัวย่อ (จีนแผ่นดินใหญ่)"), ("zh-tw", "จีนตัวเต็ม (ไต้หวัน / ฮ่องกง)"),
-              ("en", "อังกฤษ")]
+GAME_LANGS = [("ja", "Japanese"), ("ko", "Korean"), ("zh", "Chinese (simplified)"),
+              ("zh-tw", "Chinese (traditional: Taiwan / Hong Kong)"), ("en", "English")]  # names: i18n.t() them
 KINDS = ("dialog", "name", "subtitle", "choice")
-KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)", "name": "ชื่อผู้พูด", "subtitle": "ซับระหว่างเล่น",
-               "choice": "ตัวเลือกคำตอบ"}
+KIND_LABELS = {"dialog": "Dialogue (text box)", "name": "Speaker name", "subtitle": "Subtitles while playing",
+               "choice": "Answer choices"}  # shown through i18n.t()
 # engines the server knows, in the order the user sees them; remote ones send text off this machine
+# names and descriptions are shown through i18n.t()
 ENGINE_INFO = [
-    {"key": "hymt", "name": "โมเดลแปลในเครื่อง (แนะนำ)", "desc": "ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง", "keys": []},
-    {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร", "desc": "ฟรี • ไม่ใช้การ์ดจอ", "keys": []},
-    {"key": "deepl", "name": "DeepL", "desc": "ฟรี 500,000 ตัวอักษร/เดือน • ต้องสมัคร",
+    {"key": "hymt", "name": "Local translation model (recommended)",
+     "desc": "Free, works offline • model picked by your graphics card", "keys": []},
+    {"key": "google_free", "name": "Google — free, no sign-up", "desc": "Free • no graphics card needed", "keys": []},
+    {"key": "deepl", "name": "DeepL", "desc": "Free 500,000 characters a month • sign-up needed",
      "keys": [("DEEPL_API_KEY", "API key")], "signup": "https://www.deepl.com/pro-api"},
-    {"key": "azure", "name": "Microsoft Azure", "desc": "ฟรี 2,000,000 ตัวอักษร/เดือน • ต้องสมัคร",
-     "keys": [("AZURE_TRANSLATOR_KEY", "Key"), ("AZURE_TRANSLATOR_REGION", "Region (เช่น southeastasia)")],
+    {"key": "azure", "name": "Microsoft Azure", "desc": "Free 2,000,000 characters a month • sign-up needed",
+     "keys": [("AZURE_TRANSLATOR_KEY", "Key"), ("AZURE_TRANSLATOR_REGION", "Region (e.g. southeastasia)")],
      "signup": "https://portal.azure.com/#create/Microsoft.CognitiveServicesTextTranslation"},
-    {"key": "google", "name": "Google Cloud", "desc": "ฟรี 500,000 ตัวอักษร/เดือน • ต้องสมัคร",
+    {"key": "google", "name": "Google Cloud", "desc": "Free 500,000 characters a month • sign-up needed",
      "keys": [("GOOGLE_TRANSLATE_API_KEY", "API key")],
      "signup": "https://console.cloud.google.com/apis/library/translate.googleapis.com"},
-    {"key": "cloud", "name": "Claude", "desc": "แปลสวยที่สุด • คิดเงินตามการใช้",
+    {"key": "cloud", "name": "Claude", "desc": "Best translations • paid per use",
      "keys": [("ANTHROPIC_API_KEY", "API key")], "signup": "https://console.anthropic.com/"},
 ]
 ENGINE_BY_KEY = {e["key"]: e for e in ENGINE_INFO}
@@ -136,6 +138,7 @@ class Settings:
     start_hidden: bool = False  # open only the tray icon once setup is complete
     toasts: bool = True  # short status messages on the game screen
     auto_screen: bool = False  # translate the whole screen by itself when it stands still (menus, quests)
+    ui_lang: str = "en"  # the app's own language: en / th
     english_keys: bool = True  # switch the keyboard to English while the game has the focus (games draw the key
     # of a Thai layout as a box they have no letter for)
 

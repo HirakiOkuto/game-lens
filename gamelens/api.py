@@ -7,6 +7,8 @@ import cv2
 import httpx
 import numpy as np
 
+from .i18n import t
+
 
 class LensError(RuntimeError):
     pass
@@ -22,13 +24,13 @@ class LensClient:
         try:
             return {"X-Lens-Token": self.token_file.read_text().strip()}
         except OSError as e:
-            raise LensError(f"อ่าน token ไม่ได้: {self.token_file} (ระบบแปลยังไม่เคยเปิด)") from e
+            raise LensError(t("The token cannot be read: {path} (the translation system has never run)", path=self.token_file)) from e
 
     def _call(self, method: str, path: str, **kw) -> dict:
         try:
             r = self.http.request(method, self.base + path, headers=self._headers(), **kw)
         except httpx.HTTPError as e:
-            raise LensError(f"ต่อ server ไม่ได้ ({self.base}): {e}") from e
+            raise LensError(t("Cannot reach the server ({url}): {error}", url=self.base, error=e)) from e
         if r.status_code != 200:
             try:
                 detail = r.json().get("detail", r.text[:200])
@@ -41,7 +43,7 @@ class LensClient:
         try:
             return self.http.get(self.base + "/health", timeout=5).json()
         except (httpx.HTTPError, ValueError) as e:
-            raise LensError(f"ต่อ server ไม่ได้ ({self.base}): {e}") from e
+            raise LensError(t("Cannot reach the server ({url}): {error}", url=self.base, error=e)) from e
 
     def ocr_lines(self, bgr: np.ndarray, src_lang: str = "ja", kind: str = "", series: str = "", target: str = "th",
                   align: str = "left", frame_h: int = 0) -> dict:

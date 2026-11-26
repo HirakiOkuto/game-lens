@@ -12,6 +12,8 @@ from pathlib import Path
 
 import httpx
 
+from .i18n import t
+
 CREATE_NO_WINDOW = 0x08000000
 SERVER_PORT = 9960
 MODELS = {
@@ -119,11 +121,11 @@ class ServerManager:
         """Problems that would stop the setup from starting at all."""
         problems = []
         if not (self.root / "server" / "app.py").exists():
-            problems.append(f"ไม่พบ server ของ game-lens ที่ {self.root / 'server'}")
+            problems.append(t("game-lens's server was not found at {path}", path=self.root / "server"))
         elif not self.python().exists():
-            problems.append("game-lens ยังไม่ได้ติดตั้ง (.venv)")
+            problems.append(t("game-lens is not installed (.venv)"))
         if engine in MODELS and not self.model_up(engine) and not self.llama():
-            problems.append("ไม่พบโปรแกรม llama สำหรับโมเดลในเครื่อง — ติดตั้ง Llama for Windows หรือเลือกเครื่องแปลออนไลน์")
+            problems.append(t("llama (for the local models) was not found — install Llama for Windows or choose an online translator"))
         return problems
 
     def set_hymt(self, setting: str) -> bool:
@@ -149,7 +151,7 @@ class ServerManager:
         """The model this engine runs here, as the user sees it ("Hy-MT2 1.8B (การ์ดจอ 8 GB)")."""
         if engine not in ("hymt", "index"):
             return MODEL_NAMES.get(engine, engine)
-        where = f"การ์ดจอ {self.vram:.0f} GB" if self.hymt_gpu else "ใช้ CPU เพราะไม่มีการ์ดจอแยก"
+        where = t("graphics card {gb} GB", gb=f"{self.vram:.0f}") if self.hymt_gpu else t("on the CPU: no graphics card")
         return f"{MODEL_NAMES['index'] if engine == 'index' else HYMT[self.hymt][0]} ({where})"
 
     def download_model(self, engine: str, say) -> bool:
@@ -182,11 +184,11 @@ class ServerManager:
                         pct = int(100 * have / total) if total else 0
                         if pct != shown:
                             shown = pct
-                            say(f"กำลังดาวน์โหลดโมเดลแปล {pct}% ({have / 1e9:.1f} / {total / 1e9:.1f} GB) ครั้งแรกครั้งเดียว")
+                            say(t("Downloading the translation model {pct}% ({have} / {total} GB) — only the first time", pct=pct, have=f"{have / 1e9:.1f}", total=f"{total / 1e9:.1f}"))
             part.replace(dest)
             return True
         except (httpx.HTTPError, OSError, RuntimeError) as e:
-            say(f"ดาวน์โหลดโมเดลไม่สำเร็จ ({e}) — เปิด game-lens ใหม่เพื่อโหลดต่อ หรือเลือกเครื่องแปลออนไลน์")
+            say(t("The model download failed ({error}) — open game-lens again to continue, or choose an online translator", error=e))
             return False
 
     # --- start / stop -----------------------------------------------------------------------------------------
@@ -233,28 +235,28 @@ class ServerManager:
                 say("error", problems[0])
                 return False
             if not self.server_up():
-                say("starting", "กำลังเปิดระบบแปล…")
+                say("starting", t("Starting the translation system…"))
                 self.start_server()
-            if engine in ("hymt", "index") and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
+            if engine in ("hymt", "index") and not self.model_up(engine) and not self.download_model(engine, lambda text: say("starting", text)):
                 say("error", self.detail)
                 return False
             if engine in MODELS and not self.model_up(engine):
-                say("starting", f"กำลังโหลด {self.model_name(engine)} (ครั้งแรกอาจใช้เวลาสักครู่)…")
+                say("starting", t("Loading {name} (the first time takes a while)…", name=self.model_name(engine)))
                 self.start_model(engine)
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_s:
                 srv = self.server_up()
                 mdl = engine not in MODELS or self.model_up(engine)
                 if srv and mdl:
-                    say("ready", "พร้อม")
+                    say("ready", t("Ready"))
                     return True
                 for name, p in list(self.procs.items()):
                     if p.poll() is not None:
                         self.procs.pop(name)
-                        say("error", f"{name} ปิดตัวเอง (ดู logs/{name}.log)")
+                        say("error", t("{name} stopped (see logs/{name}.log)", name=name))
                         return False
                 time.sleep(1)
-            say("error", "เปิดระบบแปลไม่ทันเวลา (ดู logs/server.log)")
+            say("error", t("The translation system did not start in time (see logs/server.log)"))
             return False
 
     def stop(self, name: str | None = None):

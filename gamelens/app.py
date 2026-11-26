@@ -24,6 +24,7 @@ from . import win32
 from .api import LensClient, LensError
 from .capture import GameCapture
 from .history import HistoryLog, HistoryWindow
+from .i18n import set_lang, t
 from .overlay import Overlay
 from .panel import Panel
 from .picker import GamePicker
@@ -107,19 +108,19 @@ def create_shortcut(folder: str | None = None) -> str:
 def friendly_error(err: str) -> str:
     """A short Thai message for the game screen (details stay in logs/gamelens.log)."""
     e = err.lower()
-    if "10061" in e or "ต่อ server ไม่ได้" in err or "connecterror" in e:
-        return "ระบบแปลยังไม่พร้อม — เปิดหน้าต่าง game-lens เพื่อดูสถานะ"
+    if "10061" in e or "cannot reach the server" in e or "ไม่สามารถเชื่อมต่อ server" in err or "connecterror" in e:
+        return t("The translation system is not ready — open the game-lens window to see why")
     if "429" in e or "rate limit" in e:
-        return "เครื่องแปลออนไลน์ถูกจำกัดชั่วคราว (429) — ลองเปลี่ยนเครื่องแปล"
+        return t("The online translator is limited for now (429) — try another translator")
     if "quota" in e or "456" in e:
-        return "โควตาเครื่องแปลหมดเดือนนี้ — เปลี่ยนเครื่องแปลในหน้าต่าง game-lens"
+        return t("The translator's quota for this month is used up — choose another translator in the game-lens window")
     if "403" in e or "401" in e or "bad key" in e:
-        return "key ของเครื่องแปลไม่ถูกต้อง — ตรวจในหน้าต่าง game-lens"
+        return t("The translator's key is not valid — check it in the game-lens window")
     if "http 500" in e:
-        return "ระบบแปลขัดข้อง — ดูรายละเอียดใน logs/server.log"
+        return t("The translation system ran into a problem — see logs/server.log")
     if "unreachable" in e:
-        return "เครื่องแปลยังไม่ได้เปิด — เปิดหน้าต่าง game-lens แล้วกด โหลด"
-    return "แปลไม่สำเร็จ: " + err.split(": ", 1)[-1][:80]
+        return t("The translator is not running — open the game-lens window and press Load")
+    return t("Translation failed: {error}", error=err.split(": ", 1)[-1][:80])
 
 
 def region_px(rect: list[float], shape) -> tuple[int, int, int, int]:
@@ -139,6 +140,7 @@ class Controller(QObject):
         super().__init__()
         self.app = app
         self.settings = Settings.load()
+        set_lang(self.settings.ui_lang)
         ppath = self.settings.resolve(os.environ.get("GAMELENS_PROFILE") or self.settings.profile)
         if not ppath.exists():
             ppath.parent.mkdir(parents=True, exist_ok=True)
@@ -208,30 +210,7 @@ class Controller(QObject):
         self.reset_watchers()
 
         # windows
-        self.panel = Panel(self.settings.hotkeys, self.settings.peek_key)
-        self.panel.setWindowIcon(app_icon())
-        pick = pick_local("auto", self.services.vram)[0]
-        auto = "Index-Translate 9B" if pick == "index" else HYMT[pick][0]
-        where = f"การ์ดจอ {self.services.vram:.0f} GB" if self.services.vram >= 1 else "ไม่มีการ์ดจอแยก"
-        self.auto_label = f"{auto}, {where}"
-        self.load_panel()
-        self.panel.model_size_changed.connect(self.set_model_size)
-        self.panel.auto_screen_changed.connect(self.set_auto_screen)
-        self.panel.toggle.connect(self.toggle)
-        self.panel.fix_server.connect(self.start_services)
-        self.panel.pick_game.connect(self.pick_window)
-        self.panel.edit_regions.connect(self.edit_regions)
-        self.panel.engine_changed.connect(self.set_engine)
-        self.panel.save_keys.connect(lambda v: self.pool.submit(self._save_keys, v))
-        self.panel.test_engine.connect(lambda: self.pool.submit(self._test_engine))
-        self.panel.font_scale_changed.connect(self.set_font_scale)
-        self.panel.target_changed.connect(lambda t: self.set_profile(target=t))
-        self.panel.src_lang_changed.connect(lambda s: self.set_profile(src_lang=s))
-        self.panel.toasts_changed.connect(self.set_toasts)
-        self.panel.english_keys_changed.connect(self.set_english_keys)
-        self.panel.show_history.connect(self.show_history)
-        self.panel.make_shortcut.connect(self.make_shortcut)
-        self.panel.quit_app.connect(self.quit)
+        self.build_panel()
 
         self.tray = QSystemTrayIcon(app_icon())
         self.tray.setToolTip("game-lens")
@@ -245,7 +224,7 @@ class Controller(QObject):
         hwnd = int(self.overlay.winId())
         for hid, name in ((HK_TOGGLE, "toggle"), (HK_SCREEN, "screen"), (HK_REGIONS, "regions"), (HK_HISTORY, "history")):
             if hk.get(name) and not win32.register_hotkey(hwnd, hid, hk[name]):
-                self.notify("game-lens", f"ปุ่มลัด {hk[name]} ถูกโปรแกรมอื่นใช้อยู่ (แก้ได้ใน settings.json)")
+                self.notify("game-lens", t("The key {key} is used by another program (change it in settings.json)", key=hk[name]))
 
         self.timer = QTimer(self, interval=50, timeout=self.tick)
         self.timer.start()
@@ -261,6 +240,48 @@ class Controller(QObject):
     # --- small helpers ----------------------------------------------------------------------------------------
     def setup_complete(self) -> bool:
         return bool((self.profile.exe or self.profile.title) and self.profile.regions)
+
+    def build_panel(self):
+        """The main window, in the app's language (made again when that changes)."""
+        self.panel = Panel(self.settings.hotkeys, self.settings.peek_key)
+        self.panel.setWindowIcon(app_icon())
+        pick = pick_local("auto", self.services.vram)[0]
+        auto = "Index-Translate 9B" if pick == "index" else HYMT[pick][0]
+        where = t("graphics card {gb} GB", gb=f"{self.services.vram:.0f}") if self.services.vram >= 1 else t("no graphics card")
+        self.auto_label = f"{auto}, {where}"
+        self.load_panel()
+        self.panel.model_size_changed.connect(self.set_model_size)
+        self.panel.auto_screen_changed.connect(self.set_auto_screen)
+        self.panel.toggle.connect(self.toggle)
+        self.panel.fix_server.connect(self.start_services)
+        self.panel.pick_game.connect(self.pick_window)
+        self.panel.edit_regions.connect(self.edit_regions)
+        self.panel.engine_changed.connect(self.set_engine)
+        self.panel.save_keys.connect(lambda v: self.pool.submit(self._save_keys, v))
+        self.panel.test_engine.connect(lambda: self.pool.submit(self._test_engine))
+        self.panel.font_scale_changed.connect(self.set_font_scale)
+        self.panel.target_changed.connect(lambda code: self.set_profile(target=code))
+        self.panel.src_lang_changed.connect(lambda s: self.set_profile(src_lang=s))
+        self.panel.toasts_changed.connect(self.set_toasts)
+        self.panel.english_keys_changed.connect(self.set_english_keys)
+        self.panel.show_history.connect(self.show_history)
+        self.panel.make_shortcut.connect(self.make_shortcut)
+        self.panel.quit_app.connect(self.quit)
+        self.panel.ui_lang_changed.connect(self.set_ui_lang)
+
+    def set_ui_lang(self, code: str):
+        self.settings.ui_lang = code
+        self.settings.save()
+        set_lang(code)
+        old, geo, shown = self.panel, self.panel.geometry(), self.panel.isVisible()
+        self.build_panel()
+        self.panel.setGeometry(geo)
+        old.hide()
+        old.deleteLater()
+        self.build_menu()
+        self.refresh_panel()
+        if shown:
+            self.panel.show()
 
     def show_panel(self):
         if not self.panel.isVisible() and not getattr(self, "_placed", False):
@@ -285,13 +306,13 @@ class Controller(QObject):
 
     def build_menu(self):
         m = QMenu()
-        m.addAction("เปิดหน้าต่าง game-lens", self.show_panel)
-        self.toggle_action = m.addAction("หยุดแปล", self.toggle)
-        m.addAction("แปลทั้งหน้าจอ", self.translate_screen)
-        m.addAction("ตั้งกรอบข้อความ", self.edit_regions)
-        m.addAction("ประวัติคำแปล", self.show_history)
+        m.addAction(t("Open the game-lens window"), self.show_panel)
+        self.toggle_action = m.addAction(t("Stop translating"), self.toggle)
+        m.addAction(t("Translate the whole screen"), self.translate_screen)
+        m.addAction(t("Set text regions"), self.edit_regions)
+        m.addAction(t("Translation history"), self.show_history)
         m.addSeparator()
-        m.addAction("ปิดโปรแกรม", self.quit)
+        m.addAction(t("Quit"), self.quit)
         self.menu = m
         self.tray.setContextMenu(m)
 
@@ -366,47 +387,47 @@ class Controller(QObject):
         # 1. translation system
         svc = self.services
         if self.health and self.health.get(eng):
-            self.panel.s_server.set("ok", f"พร้อม — {svc.model_name(eng) if eng in MODELS else info['name']}")
+            self.panel.s_server.set("ok", t("Ready — {name}", name=svc.model_name(eng) if eng in MODELS else t(info["name"])))
         elif svc.state == "starting":
             self.panel.s_server.set("warn", svc.detail)
         elif not self.health:
-            msg = svc.detail if svc.state == "error" else "ระบบแปลยังไม่เปิด"
-            self.panel.s_server.set("bad", msg, "เปิด", primary=True)
+            msg = svc.detail if svc.state == "error" else t("The translation system is not running")
+            self.panel.s_server.set("bad", msg, t("Start"), primary=True)
         elif not self.health.get(eng):
             if eng in MODELS:
-                self.panel.s_server.set("warn", f"ยังไม่ได้โหลด {svc.model_name(eng)}", "โหลด", primary=True)
+                self.panel.s_server.set("warn", t("{name} is not loaded yet", name=svc.model_name(eng)), t("Load"), primary=True)
             elif info.get("keys"):
-                self.panel.s_server.set("warn", f"ยังไม่ได้ใส่ key ของ {info['name']} (ช่องด้านล่าง)")
+                self.panel.s_server.set("warn", t("Enter the key for {name} (below)", name=t(info["name"])))
             else:
-                self.panel.s_server.set("warn", f"{info['name']} ยังไม่พร้อม")
+                self.panel.s_server.set("warn", t("{name} is not ready", name=t(info["name"])))
         else:
-            self.panel.s_server.set("ok", f"พร้อม — {info['name']}")
+            self.panel.s_server.set("ok", t("Ready — {name}", name=t(info["name"])))
         # 2. game
         if not (p.exe or p.title):
-            self.panel.s_game.set("bad", "ยังไม่ได้เลือกหน้าต่างเกม", "เลือกเกม", primary=True)
+            self.panel.s_game.set("bad", t("No game window chosen yet"), t("Choose game"), primary=True)
         elif self.hwnd is None:
-            self.panel.s_game.set("warn", f"รอเกมเปิด… ({p.exe or p.title}) • ตั้งเกมเป็น Borderless/Windowed", "เปลี่ยน")
+            self.panel.s_game.set("warn", t("Waiting for the game… ({game}) • set the game to Borderless / Windowed", game=p.exe or p.title), t("Change"))
         else:
-            self.panel.s_game.set("ok", f"{win32.window_title(self.hwnd)[:50] or p.exe} • {LANG_NAMES.get(p.src_lang, p.src_lang)}",
-                                  "เปลี่ยน")
+            self.panel.s_game.set("ok", f"{win32.window_title(self.hwnd)[:50] or p.exe} • {t(LANG_NAMES.get(p.src_lang, p.src_lang))}",
+                                  t("Change"))
         # 3. regions
         if not p.regions:
             if self.hwnd is None:
-                self.panel.s_regions.set("idle", "เปิดเกมก่อน แล้วไปหน้าที่มีบทพูด")
+                self.panel.s_regions.set("idle", t("Open the game first, then go to a screen with dialogue"))
             else:
-                self.panel.s_regions.set("bad", "ไปหน้าที่มีบทพูดในเกม แล้วกดตั้งกรอบ", "ตั้งกรอบ", primary=True)
+                self.panel.s_regions.set("bad", t("Go to a screen with dialogue, then press Set regions"), t("Set regions"), primary=True)
         else:
-            kinds = ", ".join(sorted({KIND_LABELS[r.kind].split(" (")[0] for r in p.regions}))
-            self.panel.s_regions.set("ok", f"{len(p.regions)} กรอบ: {kinds}", "แก้ไข" if self.hwnd else None)
+            kinds = ", ".join(sorted({t(KIND_LABELS[r.kind]).split(" (")[0] for r in p.regions}))
+            self.panel.s_regions.set("ok", t("{n} regions: {kinds}", n=len(p.regions), kinds=kinds), t("Edit") if self.hwnd else None)
         ready = bool(self.health) and self.hwnd is not None and bool(p.regions)
         if self.enabled and ready:
-            hint = "กำลังแปล — สลับไปเล่นเกมได้เลย"
+            hint = t("Translating — you can switch to the game")
         elif not self.enabled:
-            hint = "หยุดอยู่"
+            hint = t("Stopped")
         else:
-            hint = "ทำขั้นตอนที่ยังไม่เป็นสีเขียวให้ครบ แล้วจะเริ่มแปลเอง"
+            hint = t("Complete the steps that are not green yet; translating then starts by itself")
         self.panel.set_running(self.enabled, ready, hint)
-        self.toggle_action.setText("หยุดแปล" if self.enabled else "เริ่มแปล")
+        self.toggle_action.setText(t("Stop translating") if self.enabled else t("Start translating"))
         self.tray.setToolTip("game-lens — " + hint)
 
     def set_model_size(self, size: str):
@@ -419,8 +440,8 @@ class Controller(QObject):
         self.profile.live_engine = self.services.engine_for(self.profile.engine)
         self.shown.clear()
         if self.services.model_up(self.profile.live_engine):  # still the old one: started outside game-lens (e.g. Llama for Windows)
-            self.panel.set_engine_status("โมเดลเดิมยังเปิดอยู่นอก game-lens — ปิดโปรแกรมนั้นก่อน แล้วกด 'เปิด' ที่ขั้น 1",
-                                         "warn")
+            self.panel.set_engine_status(t("The old model is still running outside game-lens — close that program first, "
+                                           "then press Start in step 1"), "warn")
         elif self.profile.engine == "hymt" and self.settings.auto_start_server:  # the local translator
             self.start_services()
         self.refresh_panel()
@@ -447,7 +468,7 @@ class Controller(QObject):
             if r.get("ok") and self.profile.engine == "deepl":
                 u = self.api.usage().get("deepl") or {}
                 if "used" in u:
-                    r["quota"] = f"ใช้ไป {u['used']:,} / {u['limit']:,} ตัวอักษรเดือนนี้"
+                    r["quota"] = t("{used:,} / {limit:,} characters used this month", used=u["used"], limit=u["limit"])
         except LensError as e:
             r = {"ok": False, "error": str(e)}
         self.bridge.engine_test.emit(r)
@@ -455,12 +476,12 @@ class Controller(QObject):
 
     def on_engine_test(self, r: dict):
         if r.get("pending"):
-            self.panel.set_engine_status("กำลังทดสอบ…")
+            self.panel.set_engine_status(t("Testing…"))
         elif r.get("ok"):
             extra = f" • {r['quota']}" if r.get("quota") else ""
-            self.panel.set_engine_status(f"✓ ใช้ได้: “{r['text']}” ({r['ms']} ms){extra}", "ok")
+            self.panel.set_engine_status(t("✓ Works: “{text}” ({ms} ms){extra}", text=r["text"], ms=r["ms"], extra=extra), "ok")
         else:
-            self.panel.set_engine_status(f"✗ {r.get('error', 'ใช้ไม่ได้')[:160]}", "bad")
+            self.panel.set_engine_status(t("✗ {error}", error=r.get("error", t("does not work"))[:160]), "bad")
 
     # --- profile / display ------------------------------------------------------------------------------------
     def set_profile(self, **kw):
@@ -495,13 +516,13 @@ class Controller(QObject):
         hkl = win32.english_layout()
         if hkl and not win32.ask_layout(self.hwnd, hkl):
             self.next_keys = now + 3600  # the game runs as administrator: Windows keeps us out
-            self.toast("สลับแป้นพิมพ์ให้ไม่ได้ เพราะเกมเปิดแบบผู้ดูแลระบบ — เปิด game-lens แบบผู้ดูแลระบบด้วย", 6)
+            self.toast(t("The keyboard cannot be switched: the game runs as administrator — run game-lens as administrator too"), 6)
             log.info("keyboard: the game's window takes no messages from game-lens (it runs elevated)")
             return
         if hkl:
             if not self.keys_told:
                 self.keys_told = True
-                self.toast("สลับแป้นพิมพ์เป็นภาษาอังกฤษให้แล้ว (ปิดได้ในหน้าต่าง game-lens)", 3)
+                self.toast(t("Keyboard switched to English (this can be turned off in the game-lens window)"), 3)
 
     def set_toasts(self, on: bool):
         self.settings.toasts = on
@@ -511,10 +532,10 @@ class Controller(QObject):
         self.enabled = not self.enabled
         if not self.enabled:
             self.overlay.clear()
-            self.toast("game-lens: หยุดแปล")
+            self.toast(t("game-lens: stopped"))
         else:
             self.reset_watchers()
-            self.toast("game-lens: แปลต่อ")
+            self.toast(t("game-lens: translating"))
         self.refresh_panel()
 
     def quit(self):
@@ -542,9 +563,9 @@ class Controller(QObject):
     def make_shortcut(self):
         err = create_shortcut()
         if err:
-            self.notify("สร้างไอคอนไม่สำเร็จ", err[:200])
+            self.notify(t("The icon could not be made"), err[:200])
         else:
-            self.notify("game-lens", "สร้างไอคอน game-lens บน Desktop แล้ว — ครั้งต่อไปดับเบิลคลิกได้เลย")
+            self.notify("game-lens", t("The game-lens icon is on the Desktop — next time just double-click it"))
 
     # --- game window ------------------------------------------------------------------------------------------
     def load_panel(self):
@@ -587,7 +608,7 @@ class Controller(QObject):
                 path = found or Path(new_profile(w["exe"], w.get("title", ""), self.profile).path)
                 self.switch_profile(path)
                 if not found:
-                    self.toast(f"โปรไฟล์ใหม่สำหรับ {self.profile.name} — ตั้งภาษาในเกมและกรอบข้อความ (F10)", 6)
+                    self.toast(t("New profile for {name} — set the game language and the text regions (F10)", name=self.profile.name), 6)
             else:
                 if not self.profile.exe and not self.profile.regions:
                     self.profile.src_lang = guess_lang(w.get("title", ""), self.profile.src_lang)
@@ -626,13 +647,13 @@ class Controller(QObject):
             log.warning("capture failed: %s", e)
             if not getattr(self, "_capture_warned", False):
                 self._capture_warned = True
-                self.notify("game-lens: จับภาพหน้าต่างเกมไม่ได้", str(e)[:200])
+                self.notify(t("game-lens: the game window cannot be captured"), str(e)[:200])
             return
         self.hwnd = hwnd
         self.reset_watchers()
         self.refresh_panel()
         if self.profile.regions:
-            self.toast("game-lens พร้อมแปล • กด F8 ค้างเพื่อดูต้นฉบับ", 4)
+            self.toast(t("game-lens is translating • hold F8 to see the original"), 4)
         else:
             self.show_panel()
 
@@ -712,7 +733,7 @@ class Controller(QObject):
                     wt.read_at = now + 0.5
                     if now - self.waiting_toast > 15:
                         self.waiting_toast = now
-                        self.toast("กำลังเปิดระบบแปล… รอสักครู่", 3)
+                        self.toast(t("Starting the translation system… please wait"), 3)
                     continue
                 self.pool.submit(self.job_read, r, px, crop.copy(), wt, frame.shape[0])
             # text over the moving scene: paint the covered glyphs again from this frame, so what hides them moves
@@ -821,7 +842,7 @@ class Controller(QObject):
             self.dismiss_screen()
             return
         if not self.cap:
-            self.notify("game-lens", "ยังไม่พบหน้าต่างเกม")
+            self.notify("game-lens", t("The game window was not found"))
             return
         frame, _ = self.cap.client_frame()
         if frame is None:
@@ -840,7 +861,7 @@ class Controller(QObject):
         self.auto_done = stroke_map(frame, "any")  # this text is handled: auto mode will not start on it again
         self.overlay.set_pending("screen", (frame.shape[1] // 2 + 21, 60))
         if not auto:
-            self.toast("กำลังแปลทั้งหน้าจอ… (F9 / Esc ปิด)", 2)
+            self.toast(t("Translating the whole screen… (F9 / Esc to close)"), 2)
         # lines inside a region that is showing its own translation are left to that region
         # ...but only while someone speaks (a short name in a name region): on a menu, the text that happens to lie
         # in a region is part of the menu
@@ -922,7 +943,7 @@ class Controller(QObject):
             self.dismiss_screen()  # (and take away what an earlier reading of this screen put there)
             return
         if not items:
-            self.toast("ไม่พบข้อความบนจอ", 2)
+            self.toast(t("No text on the screen"), 2)
         self.overlay.set_items("screen", items)
         # a menu (many labels; or asked for with F9): the regions' own translations would be pieces of it
         self.screen_menu = len(items) >= 8 or not self.screen_auto
@@ -963,7 +984,7 @@ class Controller(QObject):
             return
         if not self.cap or self.hwnd is None:
             self.show_panel()
-            self.notify("game-lens", "เปิดเกมและเลือกหน้าต่างเกมก่อน")
+            self.notify("game-lens", t("Open the game and choose its window first"))
             return
         frame, _ = self.cap.client_frame()
         cr = win32.client_rect(self.hwnd)
@@ -985,7 +1006,7 @@ class Controller(QObject):
                 self.shown_seq.clear()
                 self.reset_watchers()
                 if regions:
-                    self.toast(f"บันทึก {len(regions)} กรอบแล้ว — เริ่มแปล", 3)
+                    self.toast(t("{n} regions saved — translating", n=len(regions)), 3)
             self.editor = None
             self.refresh_panel()
             if not self.profile.regions:
@@ -1012,17 +1033,17 @@ class Controller(QObject):
         p = self.profile
         text = self.history.source_text()
         if not text:
-            self.notify("game-lens", "ยังไม่มีประวัติให้สร้าง glossary")
+            self.notify("game-lens", t("No history to build a glossary from yet"))
             return
         engine = "cloud" if p.engine == "cloud" else "local"  # needs a general LLM, not an MT model
-        self.notify("game-lens", "กำลังหาชื่อตัวละครจากประวัติ… (ต้องใช้ Gemma หรือ Claude)")
+        self.notify("game-lens", t("Looking for character names in the history… (needs Gemma or Claude)"))
         try:
             r = self.api.extract_glossary(p.series, text, p.target, engine, engine == "cloud")
         except LensError as e:
-            self.notify("สร้าง glossary ไม่สำเร็จ", str(e)[:200])
+            self.notify(t("The glossary could not be built"), str(e)[:200])
             return
         n = len(r["proposed"].get("characters", [])) + len(r["proposed"].get("terms", []))
-        self.notify("glossary อัปเดตแล้ว", f"พบ {n} ชื่อ/ศัพท์ — ชื่อจะถูกแปลเหมือนกันทุกครั้ง")
+        self.notify(t("Glossary updated"), t("{n} names / terms found — they are translated the same way every time", n=n))
 
 
 def main():

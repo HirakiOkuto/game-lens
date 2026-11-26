@@ -386,13 +386,44 @@ def test_panel_builds_and_switches_engine_fields():
     assert not p.big.isEnabled()
 
 
-def test_friendly_errors_are_thai_and_short():
+def test_friendly_errors_in_the_app_language_and_short():
     from gamelens.app import friendly_error
+    from gamelens.i18n import set_lang
 
-    assert "ยังไม่พร้อม" in friendly_error("ต่อ server ไม่ได้ (http://127.0.0.1:9960): [WinError 10061] refused")
-    assert "429" in friendly_error("server HTTP 503: translation failed: google_free: Google (free) HTTP 429 (rate limited)")
-    assert "โควตา" in friendly_error("server HTTP 503: translation failed: deepl: DeepL HTTP 456 (quota exceeded): x")
-    assert len(friendly_error("x: " + "y" * 500)) < 100
+    try:
+        set_lang("th")
+        assert "ยังไม่พร้อม" in friendly_error("ไม่สามารถเชื่อมต่อ server ได้ (http://127.0.0.1:9960): [WinError 10061] refused")
+        assert "429" in friendly_error("server HTTP 503: translation failed: google_free: Google (free) HTTP 429 (rate limited)")
+        assert "โควตา" in friendly_error("server HTTP 503: translation failed: deepl: DeepL HTTP 456 (quota exceeded): x")
+        set_lang("en")
+        assert "not ready" in friendly_error("Cannot reach the server (http://127.0.0.1:9960): [WinError 10061] refused")
+        assert "quota" in friendly_error("server HTTP 503: translation failed: deepl: DeepL HTTP 456 (quota exceeded): x")
+        assert len(friendly_error("x: " + "y" * 500)) < 110
+    finally:
+        set_lang("en")
+
+
+def test_every_text_of_the_app_has_its_thai():
+    """Every t("...") in the app has an entry in the Thai table, and its {values} match."""
+    import ast
+    import re
+    from pathlib import Path
+
+    from gamelens.i18n import TH
+    from gamelens.profile import ENGINE_INFO, GAME_LANGS, KIND_LABELS
+
+    used = set()
+    for f in Path("gamelens").glob("*.py"):
+        for node in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "t" and node.args
+                    and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                used.add(node.args[0].value)
+    names_shown = {"Local translation model (recommended)", "Google — free, no sign-up"}  # the others are brand names
+    used |= names_shown | {e["desc"] for e in ENGINE_INFO} | {n for _, n in GAME_LANGS} | set(KIND_LABELS.values())
+    missing = sorted(u for u in used if u not in TH)
+    assert missing == [], missing
+    for en, th in TH.items():
+        assert set(re.findall(r"\{(\w+)", en)) == set(re.findall(r"\{(\w+)", th)), en
 
 
 def test_snap_dialog_region_to_its_box():

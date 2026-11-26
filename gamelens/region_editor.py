@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPen
 from PySide6.QtWidgets import QHBoxLayout, QMenu, QPushButton, QWidget
 
 from .profile import KIND_LABELS, KINDS, Region
+from .i18n import t
 
 COLORS = {"dialog": "#4fc3f7", "name": "#ffb74d", "subtitle": "#aed581", "choice": "#f48fb1"}
 HANDLE = 14
@@ -139,7 +140,7 @@ class RegionEditor(QWidget):
         self.regions = [Region(**vars(r)) for r in regions]
         self.selected: Region | None = None
         self.blocks: list[dict] = []
-        self.status = "กำลังหาข้อความบนจอ…" if find_text else ""
+        self.status = t("Looking for text on the screen…") if find_text else ""
         self.mode = None  # 'new' / 'move' / 'resize'
         self.press: QPoint | None = None
         self.cursor_pos: QPoint | None = None
@@ -150,7 +151,7 @@ class RegionEditor(QWidget):
         bar = QWidget(self)
         bl = QHBoxLayout(bar)
         bl.setContentsMargins(0, 0, 0, 0)
-        for text, slot, primary in (("ยกเลิก (Esc)", self._cancel, False), ("บันทึก (Enter)", self._save, True)):
+        for text, slot, primary in ((t("Cancel (Esc)"), self._cancel, False), (t("Save (Enter)"), self._save, True)):
             b = QPushButton(text)
             b.setObjectName("primary" if primary else "")
             b.clicked.connect(slot)
@@ -171,7 +172,7 @@ class RegionEditor(QWidget):
 
     def _got_blocks(self, blocks: list):
         self.blocks = blocks
-        self.status = ("คลิกที่บทพูด (เส้นประ) เพื่อสร้างกรอบ" if blocks else "ไม่พบข้อความบนจอ — ลากกรอบเองได้เลย")
+        self.status = t("Click the dialogue (dashed) to make a region") if blocks else t("No text found on the screen — drag a region yourself")
         self.update()
 
     def resizeEvent(self, _):
@@ -206,10 +207,10 @@ class RegionEditor(QWidget):
             p.fillRect(q, QColor(c.red(), c.green(), c.blue(), 60 if r is self.selected else 35))
             p.setPen(QPen(c, 3 if r is self.selected else 2))
             p.drawRect(q)
-            tag = QRect(q.x(), q.y() - 24, max(130, len(KIND_LABELS[r.kind]) * 9), 22)
+            tag = QRect(q.x(), q.y() - 24, max(130, len(t(KIND_LABELS[r.kind])) * 9), 22)
             p.fillRect(tag, c)
             p.setPen(QColor("#101318"))
-            p.drawText(tag.adjusted(6, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, KIND_LABELS.get(r.kind, r.kind))
+            p.drawText(tag.adjusted(6, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, t(KIND_LABELS.get(r.kind, r.kind)))
             p.fillRect(QRect(q.right() - HANDLE + 1, q.bottom() - HANDLE + 1, HANDLE, HANDLE), c)
         if self.mode == "new" and self.press and self.cursor_pos:
             p.setPen(QPen(QColor("#ffffff"), 1, Qt.PenStyle.DashLine))
@@ -221,14 +222,14 @@ class RegionEditor(QWidget):
         f.setBold(True)
         p.setFont(f)
         p.drawText(QRect(16, 6, self.width() - 32, 24), Qt.AlignmentFlag.AlignVCenter,
-                   self.status or "ลากเพื่อสร้างกรอบรอบกล่องบทพูด")
+                   self.status or t("Drag to make a region around the dialogue box"))
         f.setPixelSize(13)
         f.setBold(False)
         p.setFont(f)
         p.setPen(QColor("#b9c2d0"))
         p.drawText(QRect(16, 30, self.width() - 32, 22), Qt.AlignmentFlag.AlignVCenter,
-                   "ลากที่ว่าง = กรอบใหม่ • ลากกรอบ = ย้าย • ลากมุมขวาล่าง = ปรับขนาด • "
-                   "1 บทพูด  2 ชื่อผู้พูด  3 ซับ • Delete ลบ • คลิกขวา = ตัวเลือก")
+                   t("Drag empty space = new region • drag a region = move • drag its lower right corner = resize • "
+                     "1 dialogue  2 speaker  3 subtitles  4 choices • Delete removes • right click = options"))
         p.end()
 
     # --- hit tests --------------------------------------------------------------------------------------------
@@ -313,23 +314,23 @@ class RegionEditor(QWidget):
     def _menu(self, r: Region, at):
         m = QMenu(self)
         for i, k in enumerate(KINDS, 1):
-            a = m.addAction(f"{i}  {KIND_LABELS[k]}")
+            a = m.addAction(f"{i}  {t(KIND_LABELS[k])}")
             a.setCheckable(True)
             a.setChecked(r.kind == k)
             a.triggered.connect(lambda _=False, k=k: self._set_kind(r, k))
         m.addSeparator()
-        ink = m.addMenu("สีตัวอักษรในกรอบ")
-        for v, label in (("light", "สว่าง (ขาวบนพื้นเข้ม)"), ("dark", "เข้ม (ดำบนพื้นสว่าง)"), ("any", "ไม่แน่นอน / หลายสี")):
+        ink = m.addMenu(t("Text colour in the region"))
+        for v, label in (("light", t("Light (white on dark)")), ("dark", t("Dark (black on light)")), ("any", t("Varies / several colours"))):
             a = ink.addAction(label)
             a.setCheckable(True)
             a.setChecked(r.ink == v)
             a.triggered.connect(lambda _=False, v=v: setattr(r, "ink", v))
-        al = m.addAction("จัดข้อความกึ่งกลาง")
+        al = m.addAction(t("Centre the text"))
         al.setCheckable(True)
         al.setChecked(r.align == "center")
         al.triggered.connect(lambda on: setattr(r, "align", "center" if on else "left"))
         m.addSeparator()
-        m.addAction("ลบกรอบนี้ (Delete)").triggered.connect(lambda: self._delete(r))
+        m.addAction(t("Remove this region (Delete)")).triggered.connect(lambda: self._delete(r))
         m.exec(at)
         self.update()
 

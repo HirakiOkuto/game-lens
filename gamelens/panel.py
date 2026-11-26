@@ -8,6 +8,7 @@ from PySide6.QtCore import QMargins, Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
 
+from .i18n import LANGS, lang, t
 from .profile import GAME_LANGS, ENGINE_BY_KEY, ENGINE_INFO
 from .ui_style import BAD, IDLE, OK, WARN
 
@@ -27,9 +28,9 @@ def card(title: str) -> tuple[QFrame, QVBoxLayout]:
     lay.setContentsMargins(14, 12, 14, 12)
     lay.setSpacing(6)
     if title:
-        t = QLabel(title)
-        t.setObjectName("h2")
-        lay.addWidget(t)
+        head = QLabel(title)
+        head.setObjectName("h2")
+        lay.addWidget(head)
     return f, lay
 
 
@@ -83,6 +84,7 @@ class Panel(QWidget):
     src_lang_changed = Signal(str)
     toasts_changed = Signal(bool)
     english_keys_changed = Signal(bool)
+    ui_lang_changed = Signal(str)
     auto_screen_changed = Signal(bool)
     show_history = Signal()
     make_shortcut = Signal()
@@ -98,7 +100,7 @@ class Panel(QWidget):
         head = QHBoxLayout()
         title = QLabel("訳  game-lens")
         title.setObjectName("title")
-        sub = QLabel("แปลเกมญี่ปุ่นเป็นไทย ทับบนจอเกม")
+        sub = QLabel(t("Game text translated into Thai, drawn over the game"))
         sub.setObjectName("muted")
         tcol = QVBoxLayout()
         tcol.setSpacing(0)
@@ -107,17 +109,17 @@ class Panel(QWidget):
         head.addLayout(tcol)
 
         # 1-2-3 checklist
-        steps, sl = card("เตรียมพร้อม")
-        self.s_server = Step(1, "ระบบแปล", "เปิด")
-        self.s_game = Step(2, "เกม", "เลือกเกม")
-        self.s_regions = Step(3, "กรอบข้อความในเกม", "ตั้งกรอบ")
+        steps, sl = card(t("Getting ready"))
+        self.s_server = Step(1, t("Translation system"), t("Start"))
+        self.s_game = Step(2, t("Game"), t("Choose game"))
+        self.s_regions = Step(3, t("Text regions in the game"), t("Set regions"))
         self.s_server.button.clicked.connect(self.fix_server.emit)
         self.s_game.button.clicked.connect(self.pick_game.emit)
         self.s_regions.button.clicked.connect(self.edit_regions.emit)
         for s in (self.s_server, self.s_game, self.s_regions):
             sl.addWidget(s)
 
-        self.big = QPushButton("▶  เริ่มแปล")
+        self.big = QPushButton(t("▶  Start translating"))
         self.big.setObjectName("big")
         self.big.clicked.connect(self.toggle.emit)
         self.big_hint = QLabel("")
@@ -125,10 +127,10 @@ class Panel(QWidget):
         self.big_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # engine
-        eng, el = card("เครื่องแปล")
+        eng, el = card(t("Translator"))
         self.engine = QComboBox()
         for e in ENGINE_INFO:
-            self.engine.addItem(e["name"], e["key"])
+            self.engine.addItem(t(e["name"]), e["key"])
         self.engine.currentIndexChanged.connect(self._engine_picked)
         self.engine_desc = QLabel("")
         self.engine_desc.setObjectName("muted")
@@ -137,13 +139,13 @@ class Panel(QWidget):
         self.size_box = QWidget()
         szl = QHBoxLayout(self.size_box)
         szl.setContentsMargins(0, 0, 0, 0)
-        szl.addWidget(QLabel("รุ่นโมเดล"))
+        szl.addWidget(QLabel(t("Model")))
         self.size = QComboBox()
-        for label, key in (("อัตโนมัติตามการ์ดจอ", "auto"),
-                           ("Index-Translate 9B — แปลเป็นธรรมชาติที่สุด • การ์ดจอ ~5.5 GB • โหลด 5.8 GB", "index"),
-                           ("Hy-MT2 7B — การ์ดจอ ~5.5 GB • โหลด 4.6 GB", "7b"),
-                           ("Hy-MT2 1.8B — เร็ว การ์ดจอ ~2 GB หรือ CPU • แปลด้อยกว่า • โหลด 1.1 GB", "1.8b")):
-            self.size.addItem(label, key)
+        for label, key in (("Automatic, by graphics card", "auto"),
+                           ("Index-Translate 9B — most natural • ~5.5 GB graphics memory • 5.8 GB download", "index"),
+                           ("Hy-MT2 7B — ~5.5 GB graphics memory • 4.6 GB download", "7b"),
+                           ("Hy-MT2 1.8B — fast, ~2 GB graphics memory or CPU • lower quality • 1.1 GB download", "1.8b")):
+            self.size.addItem(t(label), key)
         self.size.currentIndexChanged.connect(lambda _: self.model_size_changed.emit(self.size.currentData()))
         szl.addWidget(self.size, 1)
         self.key_box = QWidget()
@@ -155,7 +157,7 @@ class Panel(QWidget):
         row = 0
         for e in ENGINE_INFO:
             for name, label in e.get("keys", []):
-                lab = QLabel(label)
+                lab = QLabel(t(label))
                 ed = QLineEdit()
                 ed.setEchoMode(QLineEdit.EchoMode.Password if "REGION" not in name else QLineEdit.EchoMode.Normal)
                 kl.addWidget(lab, row, 0)
@@ -163,17 +165,17 @@ class Panel(QWidget):
                 self.key_edits[name], self.key_labels[name] = ed, lab
                 row += 1
         krow = QHBoxLayout()
-        self.signup = QPushButton("สมัคร / ขอ key ↗")
+        self.signup = QPushButton(t("Sign up / get a key ↗"))
         self.signup.setObjectName("link")
         self.signup.clicked.connect(lambda: webbrowser.open(ENGINE_BY_KEY[self.engine.currentData()].get("signup", "")))
-        save = QPushButton("บันทึก key")
+        save = QPushButton(t("Save key"))
         save.clicked.connect(self._save_keys)
         krow.addWidget(self.signup)
         krow.addStretch()
         krow.addWidget(save)
         kl.addLayout(krow, row, 0, 1, 2)
         trow = QHBoxLayout()
-        self.test_btn = QPushButton("ทดสอบ")
+        self.test_btn = QPushButton(t("Test"))
         self.test_btn.clicked.connect(self.test_engine.emit)
         self.engine_status = QLabel("")
         self.engine_status.setObjectName("muted")
@@ -187,35 +189,42 @@ class Panel(QWidget):
         el.addLayout(trow)
 
         # display
-        disp, dl = card("การแสดงผล")
+        disp, dl = card(t("Display"))
         g = QGridLayout()
-        g.addWidget(QLabel("ขนาดตัวอักษร"), 0, 0)
+        g.addWidget(QLabel(t("App language")), 3, 0)
+        self.ui_lang = QComboBox()
+        for code, label in LANGS:
+            self.ui_lang.addItem(label, code)
+        self.ui_lang.setCurrentIndex(max(0, self.ui_lang.findData(lang())))
+        self.ui_lang.currentIndexChanged.connect(lambda _: self.ui_lang_changed.emit(self.ui_lang.currentData()))
+        g.addWidget(self.ui_lang, 3, 1, 1, 2)
+        g.addWidget(QLabel(t("Text size")), 0, 0)
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=60, maximum=130)
         self.font.valueChanged.connect(lambda v: (self.font_val.setText(f"{v}%"), self.font_scale_changed.emit(v / 100)))
         self.font_val = QLabel("")
         self.font_val.setFixedWidth(44)
         g.addWidget(self.font, 0, 1)
         g.addWidget(self.font_val, 0, 2)
-        g.addWidget(QLabel("ภาษาในเกม"), 1, 0)
+        g.addWidget(QLabel(t("Game language")), 1, 0)
         self.src = QComboBox()
         for code, label in GAME_LANGS:
-            self.src.addItem(label, code)
+            self.src.addItem(t(label), code)
         self.src.currentIndexChanged.connect(lambda _: self.src_lang_changed.emit(self.src.currentData()))
         g.addWidget(self.src, 1, 1, 1, 2)
-        g.addWidget(QLabel("แปลเป็น"), 2, 0)
+        g.addWidget(QLabel(t("Translate into")), 2, 0)
         self.target = QComboBox()
-        self.target.addItem("ภาษาไทย", "th")
-        self.target.addItem("English", "en")
+        self.target.addItem(t("Thai"), "th")
+        self.target.addItem(t("English"), "en")
         self.target.currentIndexChanged.connect(lambda _: self.target_changed.emit(self.target.currentData()))
         g.addWidget(self.target, 2, 1, 1, 2)
-        self.toasts = QCheckBox("แสดงข้อความสถานะสั้นๆ บนจอเกม")
+        self.toasts = QCheckBox(t("Show short status messages on the game screen"))
         self.toasts.toggled.connect(self.toasts_changed.emit)
-        self.english = QCheckBox("สลับแป้นพิมพ์เป็นภาษาอังกฤษเองเมื่ออยู่ในเกม")
-        self.english.setToolTip("แป้นภาษาไทยทำให้ป้ายปุ่มในเกมขึ้นเป็นสี่เหลี่ยม □")
+        self.english = QCheckBox(t("Switch the keyboard to English while in the game"))
+        self.english.setToolTip(t("A Thai keyboard makes the game show its key hints as boxes □"))
         self.english.toggled.connect(self.english_keys_changed.emit)
-        self.auto = QCheckBox("แปลเมนู / เควสต์เองเมื่อหน้าจอนิ่ง (ไม่ต้องกด F9)")
-        self.auto.setToolTip("เมื่อภาพทั้งจอหยุดนิ่ง เช่น เปิดเมนู จะแปลข้อความทั้งหน้าให้เอง\n"
-                             "ใช้เครื่องแปลมากขึ้น ถ้าใช้ API ที่มีโควตาควรระวัง")
+        self.auto = QCheckBox(t("Translate menus automatically when the screen is still"))
+        self.auto.setToolTip(t("When the whole screen stands still, e.g. a menu is open, all its text is translated.\n"
+                               "This uses the translator more: mind the quota of a paid API."))
         self.auto.toggled.connect(self.auto_screen_changed.emit)
         dl.addLayout(g)
         dl.addWidget(self.auto)
@@ -223,11 +232,11 @@ class Panel(QWidget):
         dl.addWidget(self.english)
 
         # hotkeys
-        keys, kl2 = card("ปุ่มลัดระหว่างเล่น")
+        keys, kl2 = card(t("Keys while playing"))
         grid = QGridLayout()
-        rows = [(peek_key, "กดค้าง = ดูต้นฉบับ"), (hotkeys.get("toggle", ""), "หยุด / เริ่มแปล"),
-                (hotkeys.get("screen", ""), "แปลทั้งจอ (เมนู)"), (hotkeys.get("regions", ""), "ตั้งกรอบข้อความ"),
-                (hotkeys.get("history", ""), "ประวัติคำแปล")]
+        rows = [(peek_key, t("hold: show the original")), (hotkeys.get("toggle", ""), t("start / stop")),
+                (hotkeys.get("screen", ""), t("translate the screen")),
+                (hotkeys.get("regions", ""), t("set regions")), (hotkeys.get("history", ""), t("history"))]
         for i, (k, what) in enumerate(rows):
             kk = QLabel(k)
             kk.setStyleSheet("background:#262a33; border:1px solid #343a46; border-radius:6px; padding:1px 7px;")
@@ -241,11 +250,11 @@ class Panel(QWidget):
         kl2.addLayout(grid)
 
         foot = QHBoxLayout()
-        hist = QPushButton("ประวัติคำแปล")
+        hist = QPushButton(t("Translation history"))
         hist.clicked.connect(self.show_history.emit)
-        sc = QPushButton("สร้างไอคอนบน Desktop")
+        sc = QPushButton(t("Desktop icon"))
         sc.clicked.connect(self.make_shortcut.emit)
-        q = QPushButton("ปิดโปรแกรม")
+        q = QPushButton(t("Quit"))
         q.clicked.connect(self.quit_app.emit)
         foot.addWidget(hist)
         foot.addWidget(sc)
@@ -292,7 +301,7 @@ class Panel(QWidget):
         self.auto.blockSignals(False)
         self.size.blockSignals(True)
         if auto_label:
-            self.size.setItemText(0, f"อัตโนมัติ — เครื่องนี้: {auto_label}")
+            self.size.setItemText(0, t("Automatic — this computer: {label}", label=auto_label))
         self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
         self.size.blockSignals(False)
         for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
@@ -310,7 +319,7 @@ class Panel(QWidget):
 
     def set_running(self, running: bool, ready: bool, hint: str):
         running = running and ready  # "stop" only means something once it is actually translating
-        self.big.setText("■  หยุดแปล" if running else "▶  เริ่มแปล")
+        self.big.setText(t("■  Stop translating") if running else t("▶  Start translating"))
         self.big.setObjectName("bigstop" if running else "big")
         repolish(self.big)
         self.big.setEnabled(ready or running)
@@ -321,7 +330,7 @@ class Panel(QWidget):
             for n, v in names.items():
                 if n in self.key_edits and not self.key_edits[n].hasFocus():
                     self.key_edits[n].clear()
-                    self.key_edits[n].setPlaceholderText(f"ตั้งไว้แล้ว ({v})" if v else "วาง key ที่นี่")
+                    self.key_edits[n].setPlaceholderText(t("set ({value})", value=v) if v else t("paste the key here"))
 
     def set_engine_status(self, text: str, state: str = "idle"):
         self.engine_status.setText(text)
@@ -335,7 +344,7 @@ class Panel(QWidget):
 
     def _show_engine(self, key: str):
         info = ENGINE_BY_KEY[key]
-        self.engine_desc.setText(info["desc"])
+        self.engine_desc.setText(t(info["desc"]))
         self.size_box.setVisible(key == "hymt")
         mine = {n for n, _ in info.get("keys", [])}
         for n, ed in self.key_edits.items():

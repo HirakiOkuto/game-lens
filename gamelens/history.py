@@ -9,6 +9,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTextBrowser, QVBoxLayout, QWidget
 
+from .i18n import t
+
 
 class HistoryLog:
     def __init__(self, folder: Path, series: str):
@@ -46,14 +48,14 @@ class HistoryWindow(QWidget):
     def __init__(self, log: HistoryLog):
         super().__init__(None)
         self.log = log
-        self.setWindowTitle("game-lens — ประวัติคำแปล")
+        self.setWindowTitle(t("game-lens — translation history"))
         self.setObjectName("window")
         self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
         self.resize(560, 640)
         self.view = QTextBrowser()
         self.view.setStyleSheet("QTextBrowser { background: #1e2128; border: 1px solid #2a2e37; border-radius: 8px;"
                                 " padding: 6px; font-family: 'Leelawadee UI', 'Yu Gothic UI'; font-size: 14px; }")
-        btn = QPushButton("สร้าง/อัปเดต glossary ชื่อตัวละครจากประวัติ")
+        btn = QPushButton(t("Build / update the character-name glossary from the history"))
         btn.clicked.connect(self.build_glossary.emit)
         row = QHBoxLayout()
         row.addWidget(btn)

@@ -199,6 +199,7 @@ class Controller(QObject):
         self.screen_marks: list = []  # what the translated text looked like (see text_state)
         self.screen_strokes = self.screen_last = None
         self.screen_quiet = 0.0
+        self.screen_count = 0  # lines of the screen being read (known once its text is read): many = a menu
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
         self.screen_texts: frozenset = frozenset()  # what the last screen translation said
@@ -827,8 +828,10 @@ class Controller(QObject):
         if self.auto_screen:
             self.auto_screen_tick(frame, now)
         for r in self.profile.regions:
-            if self.screen_menu and self.screen_ref is not None:
-                break  # a menu translated as a whole: the regions would only translate pieces of it again
+            if self.screen_ref is not None and (self.screen_menu or (self.screen_busy and self.screen_count >= 8)):
+                # a menu translated as a whole (or being translated: its text is read, there is much of it): the
+                # regions would only translate pieces of it again, and keep the model from the menu meanwhile
+                break
             px = region_px(r.rect, frame.shape)
             x, y, w, h = px
             crop = frame[y : y + h, x : x + w]
@@ -966,6 +969,7 @@ class Controller(QObject):
             return
         self.screen_auto = auto
         self.screen_busy = True
+        self.screen_count = 0
         self.screen_gen += 1
         self.screen_ref = ref
         self.screen_frame, self.screen_marks = frame, []
@@ -1025,6 +1029,8 @@ class Controller(QObject):
                 return
             groups = paragraphs(lines)
             reqs = requests(groups, p.src_lang)
+            if gen == self.screen_gen:
+                self.screen_count = len(reqs)
             boxes = [l["bbox"] for l in ocr["lines"]]
             res = self.translate_in_parts(reqs, groups, frame, boxes, gen)
             items = screen_items(frame, groups, res["lines"], p.font_scale, boxes)
@@ -1076,6 +1082,10 @@ class Controller(QObject):
     def on_screen_part(self, gen: int, items):
         if gen != self.screen_gen or self.screen_ref is None or not items:
             return
+        if self.screen_count >= 8:  # a menu: what a region drew over a piece of it goes
+            for r in self.profile.regions:
+                self.overlay.clear(r.id)
+                self.overlay.set_pending(r.id, None)
         self.show_screen_items(items)
 
     def on_screen_done(self, gen: int, items):
@@ -1144,9 +1154,12 @@ class Controller(QObject):
                 self.screen_menu = menu
                 self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
             return
-        now_map = ink_map(frame, "any")  # still being read: only a quite different screen counts
-        if changed_pixels(self.screen_ref, now_map) > 0.25 * now_map.size:
+        # still being read: only a quite different screen counts (its text, not a background that moves). The
+        # reading is given up then, and the screen is not "handled": auto mode reads what is there once it is still
+        # (what was translated already comes from the cache)
+        if stroke_change(self.screen_strokes, stroke_map(frame, "any")) > 0.6:
             self.dismiss_screen()
+            self.auto_done = None
 
     def drop_changed_items(self, frame: np.ndarray):
         """Take away the screen translations whose original text changed or is covered now (a pop-up, another tab),

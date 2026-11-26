@@ -225,7 +225,15 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         x1, y1 = min(W, int(np.ceil(xs.max()))), min(H, int(np.ceil(ys.max())))
         if x1 - x0 < 2 or y1 - y0 < 2:
             continue
-        lines.append({"bbox": [x0, y0, x1 - x0, y1 - y0], "text": txt.strip(), "conf": round(float(score), 3)})
+        line = {"bbox": [x0, y0, x1 - x0, y1 - y0], "text": txt.strip(), "conf": round(float(score), 3)}
+        # text set at an angle (a title across a picture): its box is much taller than its letters. The angle
+        # (degrees, clockwise) and the line's own length and height along it go with it
+        top = box[1].astype(float) - box[0].astype(float)
+        tilt = float(np.degrees(np.arctan2(top[1], top[0])))
+        if 3 <= abs(tilt) <= 45:
+            line.update(tilt=round(tilt, 1), tw=round(float(np.hypot(*top)) / scale),
+                        th=round(float(np.hypot(*(box[3].astype(float) - box[0].astype(float)))) / scale))
+        lines.append(line)
     # dbox is the detector's own box: steady in height and position even over a busy scene, where tightening
     # (bbox, right for text on a panel) is fooled by what lies behind the glyphs
     lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"]), dbox=l["bbox"]) for l in lines])

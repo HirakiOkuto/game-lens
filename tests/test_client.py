@@ -1055,3 +1055,45 @@ def test_a_screen_is_translated_in_parts_shown_as_they_come():
     res = Fake().translate_in_parts(reqs, groups, img, [g[0]["bbox"] for g in groups], 7)
     assert asked == [["l0", "l1", "l2", "l3"], ["l4", "l5", "l6", "l7"], ["l8", "l9"]]  # from the top, a part at a time
     assert shown == [4, 8] and len(res["lines"]) == 10  # (the last part comes with the whole screen)
+
+
+def test_labels_stay_on_their_panel_and_off_each_other():
+    from gamelens.overlay import Item
+    from gamelens.render import analyze_line
+    from gamelens.screen import keep_apart, room_for
+
+    # a short label near the right edge of a light card: its long translation grows to the left, inside the card
+    img = np.full((120, 600, 3), (120, 130, 110), np.uint8)
+    cv2.rectangle(img, (100, 20), (500, 100), (240, 238, 232), -1)
+    cv2.putText(img, "abc", (440, 66), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    look = analyze_line(img, [438, 48, 40, 24])
+    x, y, w, h = room_for((438, 40, 44, 40), "left", "กำลังดำเนินการอยู่นะ", 20, 600, [438, 48, 40, 24], [[438, 48, 40, 24]], look)
+    assert w > 100 and x >= 100 and x + w <= 500 and x < 438
+    # two translations of one row given the same room: they share it
+    a, b = Item(rect=(100, 10, 400, 40), text="ก" * 30), Item(rect=(300, 10, 250, 40), text="ข" * 20)
+    a._boxes, b._boxes = [(100, 14, 120, 30)], [(420, 14, 60, 30)]
+    keep_apart([a, b])
+    assert a.rect[0] + a.rect[2] <= b.rect[0] and a.rect[2] >= 120 and b.rect[0] + b.rect[2] == 550
+
+
+def test_text_set_at_an_angle_is_drawn_at_that_angle_in_its_own_size():
+    from gamelens.screen import screen_items
+
+    img = np.full((300, 600, 3), (233, 225, 205), np.uint8)
+    layer = np.zeros((60, 260, 3), np.uint8)
+    cv2.putText(layer, "TITLE", (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3, cv2.LINE_AA)
+    m = cv2.getRotationMatrix2D((130, 30), -12, 1.0)  # (12 degrees clockwise on screen)
+    turned = cv2.warpAffine(layer, m, (260, 120), borderValue=(0, 0, 0))
+    ys, xs = np.nonzero(turned[:, :, 0] > 100)
+    img[100 + ys, 150 + xs] = (70, 86, 96)
+    box = [150 + int(xs.min()), 100 + int(ys.min()), int(xs.max() - xs.min()), int(ys.max() - ys.min())]
+    line = {"id": "a", "bbox": box, "text": "題名", "tilt": 12.0, "tw": 170, "th": 44}
+    flat = dict(line, id="b")
+    for k in ("tilt", "tw", "th"):
+        flat.pop(k)
+    tilted = screen_items(img, [[line]], {"a": "หัวข้อ"}, 1.0)[0]
+    plain = screen_items(img, [[flat]], {"b": "หัวข้อ"}, 1.0)[0]
+    assert tilted.angle == 12.0 and plain.angle == 0
+    assert tilted.max_px < 0.8 * plain.max_px  # the tall box of the slanted line is not its letters' height
+    cx = tilted.rect[0] + tilted.rect[2] / 2
+    assert abs(cx - (box[0] + box[2] / 2)) <= 2 and tilted.align == "center"

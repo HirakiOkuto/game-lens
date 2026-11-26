@@ -41,7 +41,7 @@ def auto_pause(settled_kinds: set[str], empties: int) -> float:
     if "name" in settled_kinds and settled_kinds - {"name"}:
         need = 6.0  # someone is speaking
     else:
-        need = 2.0 if settled_kinds else 0.4  # (a screen is read in ~0.3 s: a start too early costs little)
+        need = 2.0 if settled_kinds else 0.7  # (0.4 s began reading while a tab was still sliding in)
     return max(need, min(8.0, 2.0 ** empties) if empties else 0.0)
 
 

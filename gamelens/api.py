@@ -62,6 +62,9 @@ class LensClient:
                 for b in ("bbox", "dbox"):
                     if b in l:
                         l[b] = [round(v / k) for v in l[b]]
+                for b in ("tw", "th"):
+                    if b in l:
+                        l[b] = round(l[b] / k)
         return got
 
     def translate_lines(self, lines: list[dict], *, series: str, target: str, src_lang: str, engine: str,

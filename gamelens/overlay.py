@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QPainter, QPainterPath, QPen, QTextLayout, QTextOption
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QPainter, QPainterPath, QPen, QTextLayout, QTextOption, QTransform
 from PySide6.QtWidgets import QWidget
 
 from .render import contrast_outline
@@ -33,6 +33,7 @@ class Item:
     bold: bool = False
     vcenter: bool = False  # one line, centred vertically in rect (names, subtitles, UI labels)
     rows: list[float] | None = None  # middle (y) of each original line: the translation sits on the same lines
+    angle: float = 0.0  # degrees clockwise around the middle of rect (text the game sets at an angle)
     patch: QImage | None = None
     patch_pos: tuple[int, int] = (0, 0)
     born: float = field(default_factory=time.monotonic)
@@ -216,6 +217,9 @@ class Overlay(QWidget):
         for i, (s, nw) in enumerate(lines):
             lx = x + (w - nw) / 2 if it.align == "center" else (x + w - nw if it.align == "right" else x)
             path.addText(QPointF(lx, top + i * lh + fm.ascent()), font, s)
+        if it.angle:
+            turn = QTransform().translate(x + w / 2, y + h / 2).rotate(it.angle).translate(-(x + w / 2), -(y + h / 2))
+            path = turn.map(path)
         outline = QColor(it.outline or contrast_outline(it.fg))
         pen = QPen(outline, max(1.6, font.pixelSize() / 8))
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)

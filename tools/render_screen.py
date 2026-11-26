@@ -30,6 +30,9 @@ def main():
     ap.add_argument("--engine", default="")
     ap.add_argument("--font", default="", help="draw in this font instead of the profile's")
     ap.add_argument("--target", default="", help="translate into this language instead of the profile's")
+    ap.add_argument("--read-here", action="store_true",
+                    help="read the text with server/ocr.py in this process (the reader as it is in the code now, "
+                         "without restarting the server); the server still translates")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     app = QApplication([])  # noqa: F841
@@ -46,7 +49,25 @@ def main():
         engine = ServerManager(ROOT, ROOT / "logs", st.resolve(st.models_dir), st.local_model).engine_for(prof.engine)
     api = LensClient(st.server, st.resolve(st.token_file))
     frame = cv2.imread(a.image)
-    ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
+    if a.read_here:
+        import time
+
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
+        import ocr as reader
+
+        k = min(1.5, 1080 / frame.shape[0]) if frame.shape[0] < 1000 else 1.0  # (as the app's client enlarges 720p)
+        big = cv2.resize(frame, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC) if k > 1 else frame
+        t0 = time.perf_counter()
+        found = reader.read_lines(cv2.cvtColor(big, cv2.COLOR_BGR2RGB), prof.src_lang)
+        for i, l in enumerate(found):
+            l["id"] = f"l{i}"
+            l["bbox"], l["dbox"] = [round(v / k) for v in l["bbox"]], [round(v / k) for v in l["dbox"]]
+            for key in ("tw", "th"):
+                if key in l:
+                    l[key] = round(l[key] / k)
+        ocr = {"lines": found, "ms": round((time.perf_counter() - t0) * 1000)}
+    else:
+        ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
     lines = lines_to_translate(ocr["lines"], [], prof.src_lang)
     groups = paragraphs(lines)
     res = api.translate_lines(requests(groups, prof.src_lang), series=prof.series, target=prof.target,

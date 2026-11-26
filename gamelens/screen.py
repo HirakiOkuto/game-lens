@@ -157,8 +157,10 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
     """A label's translation on one line where it fits on one line at its size: a box squeezed between icons would
     otherwise break it letter by letter. Widened around its middle (or from its start), within the picture, but
     never over other text of the screen (`others`: boxes of every line read, `own` among them) - there the font
-    gets smaller instead, nor off the plain panel or button it is on. A left-aligned label (a table's) only grows
-    to the right, a right-aligned one to the left; a centred one (under an icon) on both sides."""
+    gets smaller instead, nor off the plain panel or button it is on: there it moves towards the side that has
+    room (a label at a card's right edge grows to the left). Where what is beside it is not known to be empty (a
+    picture), a left-aligned label (a table's) only grows to the right, a right-aligned one to the left; a centred
+    one (under an icon) on both sides."""
     x, y, w, h = rect
     need = int(0.55 * size * sum(c not in THAI_MARKS for c in text)) + 6
     if w >= need:
@@ -178,10 +180,11 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
             lo = max(lo, b[0] + b[2] + 4)
         elif b[0] >= ox:
             hi = min(hi, b[0] - 4)
-    if align == "left":
-        lo = x
-    elif align == "right":
-        hi = x + w
+    if bounds is None:  # (inside `bounds` the background is plain: nothing there to cover)
+        if align == "left":
+            lo = x
+        elif align == "right":
+            hi = x + w
     new = min(need, max(3 * w, 220), hi - lo)
     if new <= w:
         return rect
@@ -223,24 +226,66 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
             done.append((tl, looks, g[0]["bbox"]))
     if not done:
         return []
-    heights = common_heights([sorted(a.glyph_h for a in looks)[len(looks) // 2] for _, looks, _ in done])
+    tilted = {id(g[0]["bbox"]): g[0] for g in groups if len(g) == 1 and g[0].get("tilt") and g[0].get("th")}
+
+    def letters(looks, own):
+        h = sorted(a.glyph_h for a in looks)[len(looks) // 2]
+        t = tilted.get(id(own))  # the box of a tilted line is taller than its letters: its own height counts
+        return min(h, round(0.72 * t["th"])) if t else h
+
+    heights = common_heights([letters(looks, own) for _, looks, own in done])
     items = []
     for (tl, looks, own), gh in zip(done, heights):
         size = max(11.0, gh * SIZE_FACTOR * font_scale)
         a = looks[0]
-        if len(looks) == 1:
+        t = tilted.get(id(own))
+        if t:
+            # along the original's own slant, around its middle; as long as the original or the translation needs
+            cx, cy = own[0] + own[2] / 2, own[1] + own[3] / 2
+            need = 0.55 * size * sum(c not in THAI_MARKS for c in tl) + 6
+            wide = min(max(t["tw"], need), 1.8 * t["tw"], 2 * min(cx, frame.shape[1] - cx) - 8)  # (longer: smaller letters)
+            tall = max(1.9 * gh, 1.6 * size)
+            rect, align = (int(cx - wide / 2), int(cy - tall / 2), int(wide), int(tall)), "center"
+        elif len(looks) == 1:
             rect, align = place(a, size)
             rect = room_for(rect, align, tl, size, frame.shape[1], own, others, a)
         else:
             rect, align = place_block(looks, size)
         items.append(Item(rect=rect, text=tl, fg=a.fg, outline=outline_for(a.fg, a.bg, all(k.calm for k in looks)),
                           max_px=size, align=align, vcenter=len(looks) == 1))
+        items[-1].angle = t["tilt"] if t else 0.0
         items[-1]._boxes = [k.box for k in looks]  # where the original text is (to notice when it changes)
         items[-1]._id = own_id[id(own)]  # which group (request) it translates
+    keep_apart(items)
     patch = erase_lines(frame, [a for _, looks, _ in done for a in looks])
     if patch is not None:
         items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)
     return items
+
+
+def keep_apart(items: list[Item]):
+    """Two translations of one row that were both given the empty room between them would be drawn over each other
+    (a long description and the label right of it; two tabs). The room is shared instead: the left one ends where
+    the right one starts if that still leaves it its original's width, else they meet half-way between the two
+    originals. The text then gets smaller (or wraps) in its narrower box."""
+    for _ in range(2):  # (a second look: narrowing one pair can be what another pair needed)
+        for a in items:
+            for b in items:
+                if a is b or a.angle or b.angle or not a._boxes or not b._boxes:
+                    continue
+                (ax, ay, aw, ah), (bx, by, bw, bh) = a.rect, b.rect
+                oa, ob = a._boxes[0], b._boxes[0]
+                if oa[0] >= ob[0]:
+                    continue  # a is the left one of the pair
+                same_row = min(ay + ah, by + bh) - max(ay, by) > 0.5 * min(ah, bh)
+                if not same_row or ax + aw <= bx - 4:
+                    continue
+                if bx - 6 - ax >= oa[2]:
+                    a.rect = (ax, ay, bx - 6 - ax, ah)
+                    continue
+                cut = (oa[0] + oa[2] + ob[0]) // 2  # between the originals
+                a.rect = (ax, ay, max(8, cut - 3 - ax), ah)
+                b.rect = (cut + 3, by, max(8, bx + bw - cut - 3), bh)
 
 
 # glyph height / height of the detector's box around a line (a name box is enlarged before it is read, which

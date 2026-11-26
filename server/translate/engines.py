@@ -402,7 +402,10 @@ class HyMtEngine:
     def _prompt(self, text: str, history: list[tuple[str, str]], glossary: list[tuple[str, str]], target: str,
                 style: str = "manga") -> str:
         tl = self.NAMES.get(target, target)
-        if style == "game":
+        if style == "game-ui":
+            bg = ["This is menu, item or skill text from a video game. "
+                  f"Translate it into {tl} faithfully and concisely; add no tone or content that is not there."]
+        elif style == "game":
             bg = ["These lines are dialogue, speaker names and menu text from a video game, in order. "
                   f"Write natural, spoken {tl} that sounds like an official game localisation."]
         else:
@@ -461,7 +464,11 @@ class HyMtEngine:
             from concurrent.futures import ThreadPoolExecutor
 
             with ThreadPoolExecutor(min(self.PARALLEL, len(alone))) as pool:
-                for i, tl in zip(alone, pool.map(lambda i: self._one(texts[i], [], terms, target, style), alone)):
+                # (a menu line or an item's description is not a line someone speaks: the note for dialogue - spoken,
+                # in the character's voice - made the model add to it: キボとスターリンクするための証。 came out as
+                # "now Kibo and Starlink are proven!")
+                ui_style = "game-ui" if style == "game" else style
+                for i, tl in zip(alone, pool.map(lambda i: self._one(texts[i], [], terms, target, ui_style), alone)):
                     out[i] = tl
         for i, text in enumerate(texts):  # dialogue: in order, each line with the ones before it
             if kinds[i] == "ui":
@@ -507,7 +514,10 @@ class IndexTranslateEngine(HyMtEngine):
         cons = []
         if glossary:
             cons.append("【硬性要求】术语对照：" + "，".join(f"{a} -> {b}" for a, b in glossary))
-        cons.append(f"【注意】这是{what}，译文要口语化、自然，像官方本地化一样符合角色说话的语气")
+        if style == "game-ui":
+            cons.append("【注意】这是电子游戏的菜单、物品或技能说明文字，译文要准确、简洁，忠实于原文，不要添加原文没有的语气或内容")
+        else:
+            cons.append(f"【注意】这是{what}，译文要口语化、自然，像官方本地化一样符合角色说话的语气")
         if history:
             cons.append("【注意】前文（仅供理解语境，不要翻译）：" + " / ".join(f"{a} => {b}" for a, b in history[-self.HISTORY:]))
         rules = "\n".join(f"{i}. {c}" for i, c in enumerate(cons, 1))

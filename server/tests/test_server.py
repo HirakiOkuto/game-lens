@@ -379,6 +379,27 @@ def test_read_lines_real_pipeline_returns_json_ready_boxes(monkeypatch):
     assert h <= 26 and y >= 8
 
 
+def test_icon_read_as_the_first_letter_is_dropped():
+    """A help button: a solid icon (a book with a ? on it, read as 2) apart from ヘルプ. A digit is thin strokes."""
+    from ocr import _drop_icon
+
+    img = np.full((40, 160, 3), 60, np.uint8)
+    img[5:35, 5:31] = 235  # the icon: a light block as high as the letters
+    img[12:28, 15:21] = 60  # (its ? cut into it)
+    for x0 in (50, 80, 110):  # three letters of thin strokes
+        img[5:35, x0 : x0 + 4] = 235
+        img[18:22, x0 : x0 + 20] = 235
+    line = {"bbox": [3, 3, 130, 34], "dbox": [0, 0, 136, 40], "text": "2ヘルプ", "conf": 0.99}
+    got = _drop_icon(img, line)
+    assert got["text"] == "ヘルプ" and 45 <= got["bbox"][0] <= 50 and got["bbox"][0] + got["bbox"][2] == 133
+    assert got["dbox"][0] + got["dbox"][2] == 136 and json.dumps(got)
+    # a thin digit before the letters is text (1キボ), and so is a line that does not start like that
+    img[:, :40] = 60  # the icon gone, a "1" in its place
+    img[5:35, 10:14] = 235
+    assert _drop_icon(img, dict(line, text="1キボ"))["text"] == "1キボ"
+    assert _drop_icon(img, dict(line, text="01キボ小屋"))["text"] == "01キボ小屋"
+
+
 def test_faint_lines_reads_only_new_boxes_in_the_languages_letters(monkeypatch):
     """A whole screen looked at again with its contrast raised: boxes where no line is are read from the picture
     itself; a box over a line already read, and icons read as stray marks, are not taken."""
@@ -470,6 +491,12 @@ def test_hymt_retries_with_stand_ins_when_a_name_is_transliterated(monkeypatch):
     assert out == ["ไปกัน", "Nono จ้ะ", "ไปกัน"]  # menu labels several at a time, still in their places
     labels = [p for p in sent if "อรุณสวัสดิ์" not in p]  # (the dialogue line has the context)
     assert len(labels) == 2 and not any("Nono จ้ะ" in p or "ไปกัน" in p for p in labels)  # labels: each on its own
+    # menu text is not spoken: faithful and concise, not in a character's voice (that added to descriptions)
+    assert all("faithfully" in p and "spoken" not in p for p in labels)
+    assert all("spoken" in p and "faithfully" not in p for p in sent if p not in labels)
+    idx = engines.IndexTranslateEngine()
+    assert "忠实于原文" in idx._prompt("証。", [], [], "th", "game-ui") and "口语化" not in idx._prompt("証。", [], [], "th", "game-ui")
+    assert "口语化" in idx._prompt("行こう", [], [], "th", "game")
     # a stand-in that gets lost: keep the first answer rather than a broken one
     monkeypatch.setattr(engines.HyMtEngine, "_ask", lambda self, p: "พ่อของมิตตี้")
     assert e.translate_page(["ミイティの父"], "ja", "th", [], g, style="game") == ["พ่อของมิตตี้"]

@@ -197,6 +197,40 @@ def _tighten(img: np.ndarray, bbox: list[int], text: str = "") -> list[int]:
     return [int(x + x0), int(y + y0), int(x1 - x0), int(y1 - y0)]
 
 
+_ICON_AS_TEXT = re.compile(r"^[0-9０-９?？!！](?=[぀-ヿ一-鿿])")
+
+
+def _drop_icon(img: np.ndarray, line: dict) -> dict:
+    """An icon before a label, read as its first letter (a help button's book with a ? on it: 2ヘルプ). It is a solid
+    block about as wide as the letters are high, apart from them; a digit is a thin stroke (01キボ小屋 stays)."""
+    m = _ICON_AS_TEXT.match(line["text"])
+    if not m:
+        return line
+    x, y, w, h = line["bbox"]
+    crop = img[y : y + h, x : x + w]
+    if crop.size == 0 or h < 6:
+        return line
+    gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
+    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    ink = th > 0 if (th > 0).mean() < 0.5 else th == 0
+    rows = np.flatnonzero(ink.mean(1) > 0.01)
+    cols = np.flatnonzero(ink.mean(0) > 0.02)
+    if len(rows) < 2 or len(cols) < 2:
+        return line
+    gh = rows[-1] - rows[0] + 1
+    breaks = np.flatnonzero(np.diff(cols) > 1)
+    if not len(breaks):
+        return line
+    a, b, c = cols[0], cols[breaks[0]] + 1, cols[breaks[0] + 1]  # the first block [a, b), the next one from c
+    fill = ink[rows[0] : rows[-1] + 1, a:b].mean()
+    if (b - a) < 0.75 * gh or fill < 0.65 or (c - b) < 0.3 * gh:
+        return line
+    dx, dy, dw, dh = line["dbox"]
+    cut = x + c - 1
+    return dict(line, text=line["text"][m.end():].lstrip(), bbox=[int(cut), y, int(x + w - cut), h],
+                dbox=[int(max(dx, cut - 2)), dy, int(dx + dw - max(dx, cut - 2)), dh])
+
+
 _KATA = r"[ァ-ヺー]"
 _FIXES = [  # look-alikes the recogniser mixes up, decided by their neighbours
     (re.compile(r"(?<=[ぁ-ゖァ-ヺ])[一—―](?=[ぁ-ゖァ-ヺ、。！？!?～〜…])"), "ー"),
@@ -253,7 +287,7 @@ def read_lines(img: np.ndarray, lang: str = "ja", min_score: float = 0.5) -> lis
         lines.append(line)
     # dbox is the detector's own box: steady in height and position even over a busy scene, where tightening
     # (bbox, right for text on a panel) is fooled by what lies behind the glyphs
-    lines = _drop_repeats([dict(l, bbox=_tighten(img, l["bbox"], l["text"]), dbox=l["bbox"]) for l in lines])
+    lines = _drop_repeats([_drop_icon(img, dict(l, bbox=_tighten(img, l["bbox"], l["text"]), dbox=l["bbox"])) for l in lines])
     if lang in NO_SPACE:
         lines = _drop_ruby(lines)
     lines = _rows(lines)

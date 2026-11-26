@@ -66,6 +66,10 @@ TH = {
     "This uses the translator more: mind the quota of a paid API.":
         "เมื่อหน้าจอหยุดนิ่ง เช่น ขณะเปิดเมนู ระบบจะแปลข้อความทั้งหน้าจอให้\n"
         "การตั้งค่านี้ใช้เครื่องแปลมากขึ้น โปรดระวังโควตาหากใช้ API ที่มีค่าใช้จ่าย",
+    "Not possible with this game: it runs as administrator. Set Windows to keep an English keyboard for it "
+    "(see README)":
+        "ใช้ไม่ได้กับเกมนี้ เนื่องจากเกมทำงานในสิทธิ์ผู้ดูแลระบบ โปรดตั้งค่า Windows ให้ใช้แป้นพิมพ์ภาษาอังกฤษกับเกมนี้ "
+        "(ดูวิธีใน README)",
     "Keys while playing": "ปุ่มลัดระหว่างเล่น",
     "hold: show the original": "กดค้าง = แสดงต้นฉบับ",
     "start / stop": "หยุด / เริ่มการแปล",

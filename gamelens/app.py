@@ -196,6 +196,7 @@ class Controller(QObject):
         self.screen_auto = False
         self.screen_texts: frozenset = frozenset()  # what the last screen translation said
         self.next_keys, self.keys_told = 0.0, False  # see keep_english_keys
+        self.keys_possible = True
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -515,9 +516,9 @@ class Controller(QObject):
             return
         hkl = win32.english_layout()
         if hkl and not win32.ask_layout(self.hwnd, hkl):
-            self.next_keys = now + 3600  # the game runs as administrator: Windows keeps us out
-            self.toast(t("The keyboard cannot be switched: the game runs as administrator — run game-lens as administrator too"), 6)
-            log.info("keyboard: the game's window takes no messages from game-lens (it runs elevated)")
+            self.keys_possible = False  # Windows keeps us out after all
+            self.panel.set_english_available(False, self.settings.english_keys)
+            log.info("keyboard: the game's window takes no messages from game-lens")
             return
         if hkl:
             if not self.keys_told:
@@ -572,6 +573,8 @@ class Controller(QObject):
         self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
                         self.auto_screen, self.settings.local_model, self.auto_label, self.profile.src_lang,
                         self.settings.english_keys)
+        if getattr(self, "hwnd", None) is not None:
+            self.panel.set_english_available(getattr(self, "keys_possible", True), self.settings.english_keys)
 
     def switch_profile(self, path: Path):
         """Another game: its own regions, language and names. Remembered as the game to open next time."""
@@ -650,6 +653,9 @@ class Controller(QObject):
                 self.notify(t("game-lens: the game window cannot be captured"), str(e)[:200])
             return
         self.hwnd = hwnd
+        # Windows lets no message from a normal program into a game that runs as administrator
+        self.keys_possible = not (win32.window_elevated(hwnd) and not win32.self_elevated())
+        self.panel.set_english_available(self.keys_possible, self.settings.english_keys)
         self.reset_watchers()
         self.refresh_panel()
         if self.profile.regions:
@@ -697,7 +703,7 @@ class Controller(QObject):
         peek = win32.key_down(self.peek_vk)
         focused = fg == self.hwnd or fg in own or self.always_show
         visible = not minimized and self.editor is None and focused and not peek
-        if fg == self.hwnd and self.settings.english_keys:
+        if fg == self.hwnd and self.settings.english_keys and self.keys_possible:
             self.keep_english_keys(time.monotonic())
         if visible:
             self.overlay.follow(cr)

@@ -334,6 +334,16 @@ class Panel(QWidget):
                     self.key_edits[n].clear()
                     self.key_edits[n].setPlaceholderText(t("set ({value})", value=v) if v else t("paste the key here"))
 
+    def set_english_available(self, ok: bool, checked: bool):
+        """The keyboard switch greys out where Windows does not let it work (a game running as administrator)."""
+        self.english.blockSignals(True)
+        self.english.setEnabled(ok)
+        self.english.setChecked(checked and ok)
+        self.english.setToolTip(t("A Thai keyboard makes the game show its key hints as boxes □") if ok else
+                                t("Not possible with this game: it runs as administrator. Set Windows to keep an "
+                                  "English keyboard for it (see README)"))
+        self.english.blockSignals(False)
+
     def set_engine_status(self, text: str, state: str = "idle"):
         self.engine_status.setText(text)
         self.engine_status.setStyleSheet(f"color: {COLORS[state] if state != 'idle' else '#9aa3b2'};")

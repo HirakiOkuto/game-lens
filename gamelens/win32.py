@@ -170,6 +170,42 @@ def ask_layout(hwnd: int, hkl: int) -> bool:
     return bool(user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl))
 
 
+_advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+_advapi.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+_advapi.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                        ctypes.POINTER(wintypes.DWORD)]
+
+
+def _elevated(process: int) -> bool | None:
+    tok = wintypes.HANDLE()
+    if not _advapi.OpenProcessToken(process, 0x0008, ctypes.byref(tok)):  # TOKEN_QUERY
+        return None
+    try:
+        val, n = wintypes.DWORD(), wintypes.DWORD()
+        if not _advapi.GetTokenInformation(tok, 20, ctypes.byref(val), 4, ctypes.byref(n)):  # TokenElevation
+            return None
+        return bool(val.value)
+    finally:
+        kernel32.CloseHandle(tok)
+
+
+def window_elevated(hwnd: int) -> bool | None:
+    """Does the window's program run as administrator? None if that cannot be told."""
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not h:
+        return None
+    try:
+        return _elevated(h)
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def self_elevated() -> bool:
+    return bool(_elevated(kernel32.GetCurrentProcess()))
+
+
 def foreground() -> int:
     return int(user32.GetForegroundWindow() or 0)
 

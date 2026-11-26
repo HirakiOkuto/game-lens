@@ -28,7 +28,15 @@ PY_LEAVE_OUT = ["Doc", "include", "libs", "Scripts", "tcl", "Tools", "Lib/test",
                 "Lib/turtledemo", "Lib/site-packages", "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll",
                 "NEWS.txt", "python.pdb"]
 SITE_LEAVE_OUT = ["pip", "pip-*", "_pytest", "pytest", "pytest-*", "py.py", "pluggy", "pluggy-*", "iniconfig",
-                  "iniconfig-*", "pygments", "pygments-*", "__pycache__"]
+                  "iniconfig-*", "pygments", "pygments-*", "__pycache__",
+                  "cv2/opencv_videoio_ffmpeg*",  # reading video files: only the replay tool does that
+                  "PySide6/opengl32sw.dll",  # software OpenGL: the app draws with QPainter
+                  "PySide6/av*.dll", "PySide6/sw*.dll",  # FFmpeg for Qt Multimedia
+                  "PySide6/*.exe", "*.pyi", "PySide6/QtAxContainer*", "PySide6/Qt6PrintSupport*", "PySide6/QtPrintSupport*",
+                  # OCR models game-lens does not use (it reads with the small detector and the medium recogniser;
+                  # PP-OCRv5 for Korean)
+                  "rapidocr/models/PP-OCRv6_det_medium.onnx", "rapidocr/models/PP-OCRv6_rec_small.onnx",
+                  "rapidocr/models/PP-OCRv6_*tiny*"]
 # Qt modules game-lens never loads (it uses Core, Gui, Widgets, Network): their DLLs, Python modules and tools
 QT_UNUSED = ["WebEngine", "WebChannel", "WebSockets", "WebView", "Quick", "Qml", "3D", "Pdf", "Multimedia",
              "Designer", "Charts", "DataVisualization", "Graphs", "Location", "Bluetooth", "Sensors", "ShaderTools",

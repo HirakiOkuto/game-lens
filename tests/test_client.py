@@ -755,3 +755,14 @@ def test_local_model_size_follows_the_graphics_card():
 
     m = ServerManager(ROOT, ROOT / "logs", ROOT / "models", "1.8b")
     assert m.model_name("hymt").startswith("Hy-MT2 1.8B") and m.model_name("local") == "Gemma 26B"
+
+
+def test_choosing_another_model_size_in_the_window():
+    from gamelens.profile import ROOT
+    from gamelens.services import ServerManager
+
+    m = ServerManager(ROOT, ROOT / "logs", ROOT / "models", "auto")
+    m.vram, m.hymt, m.hymt_gpu = 8.0, "1.8b", True  # as on an 8 GB card
+    assert m.set_hymt("1.8b") is False  # what auto picked already
+    assert m.set_hymt("7b") is True and m.hymt == "7b" and m.model_name("hymt").startswith("Hy-MT2 7B")
+    assert m.set_hymt("auto") is True and m.hymt == "1.8b"

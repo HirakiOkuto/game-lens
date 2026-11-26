@@ -75,6 +75,7 @@ class Panel(QWidget):
     pick_game = Signal()
     edit_regions = Signal()
     engine_changed = Signal(str)
+    model_size_changed = Signal(str)
     save_keys = Signal(dict)
     test_engine = Signal()
     font_scale_changed = Signal(float)
@@ -130,6 +131,18 @@ class Panel(QWidget):
         self.engine_desc = QLabel("")
         self.engine_desc.setObjectName("muted")
         self.engine_desc.setWordWrap(True)
+        # which size of the local model (only for Hy-MT2)
+        self.size_box = QWidget()
+        szl = QHBoxLayout(self.size_box)
+        szl.setContentsMargins(0, 0, 0, 0)
+        szl.addWidget(QLabel("รุ่นโมเดล"))
+        self.size = QComboBox()
+        for label, key in (("อัตโนมัติตามการ์ดจอ", "auto"),
+                           ("7B — แปลดีกว่า • ใช้การ์ดจอ ~5.5 GB • โหลด 4.6 GB", "7b"),
+                           ("1.8B — เร็ว ใช้การ์ดจอ ~2 GB หรือ CPU • แปลด้อยกว่า • โหลด 1.1 GB", "1.8b")):
+            self.size.addItem(label, key)
+        self.size.currentIndexChanged.connect(lambda _: self.model_size_changed.emit(self.size.currentData()))
+        szl.addWidget(self.size, 1)
         self.key_box = QWidget()
         kl = QGridLayout(self.key_box)
         kl.setContentsMargins(0, 2, 0, 2)
@@ -166,6 +179,7 @@ class Panel(QWidget):
         trow.addWidget(self.engine_status, 1)
         el.addWidget(self.engine)
         el.addWidget(self.engine_desc)
+        el.addWidget(self.size_box)
         el.addWidget(self.key_box)
         el.addLayout(trow)
 
@@ -253,10 +267,16 @@ class Panel(QWidget):
         return h.expandedTo(self.minimumSize()).grownBy(QMargins(0, 0, 12, 0))
 
     # --- from the controller ----------------------------------------------------------------------------------
-    def load(self, engine: str, font_scale: float, target: str, toasts: bool, auto_screen: bool = False):
+    def load(self, engine: str, font_scale: float, target: str, toasts: bool, auto_screen: bool = False,
+             model_size: str = "auto", auto_label: str = ""):
         self.auto.blockSignals(True)
         self.auto.setChecked(auto_screen)
         self.auto.blockSignals(False)
+        self.size.blockSignals(True)
+        if auto_label:
+            self.size.setItemText(0, f"อัตโนมัติตามการ์ดจอ (เครื่องนี้: {auto_label})")
+        self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
+        self.size.blockSignals(False)
         for w in (self.engine, self.font, self.target, self.toasts):
             w.blockSignals(True)
         self.engine.setCurrentIndex(max(0, self.engine.findData(engine)))
@@ -296,6 +316,7 @@ class Panel(QWidget):
     def _show_engine(self, key: str):
         info = ENGINE_BY_KEY[key]
         self.engine_desc.setText(info["desc"])
+        self.size_box.setVisible(key == "hymt")
         mine = {n for n, _ in info.get("keys", [])}
         for n, ed in self.key_edits.items():
             ed.setVisible(n in mine)

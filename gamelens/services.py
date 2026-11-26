@@ -114,6 +114,17 @@ class ServerManager:
             problems.append("ไม่พบโปรแกรม llama สำหรับโมเดลในเครื่อง — ติดตั้ง Llama for Windows หรือเลือกเครื่องแปลออนไลน์")
         return problems
 
+    def set_hymt(self, setting: str) -> bool:
+        """Choose the Hy-MT2 size again (auto / 7b / 1.8b). True when that changes which model runs; one this
+        process started is stopped, so that the next ensure() starts (and if need be downloads) the other."""
+        new = pick_hymt(setting, self.vram)
+        if new == (self.hymt, self.hymt_gpu):
+            return False
+        self.hymt, self.hymt_gpu = new
+        if "hymt" in self.procs:
+            self.stop("hymt")
+        return True
+
     def model_name(self, engine: str) -> str:
         """The model this engine runs here, as the user sees it ("Hy-MT2 1.8B (การ์ดจอ 8 GB)")."""
         if engine != "hymt":

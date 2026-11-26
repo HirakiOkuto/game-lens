@@ -30,7 +30,7 @@ from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
 from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
-from .services import MODELS, ServerManager
+from .services import HYMT, MODELS, ServerManager, pick_hymt
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
 from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
@@ -191,8 +191,11 @@ class Controller(QObject):
         # windows
         self.panel = Panel(self.settings.hotkeys, self.settings.peek_key)
         self.panel.setWindowIcon(app_icon())
+        auto = HYMT[pick_hymt("auto", self.services.vram)[0]][0].replace("Hy-MT2 ", "")
+        where = f"การ์ดจอ {self.services.vram:.0f} GB" if self.services.vram >= 1 else "ไม่มีการ์ดจอแยก"
         self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
-                        self.auto_screen)
+                        self.auto_screen, self.settings.local_model, f"{auto}, {where}")
+        self.panel.model_size_changed.connect(self.set_model_size)
         self.panel.auto_screen_changed.connect(self.set_auto_screen)
         self.panel.toggle.connect(self.toggle)
         self.panel.fix_server.connect(self.start_services)
@@ -382,6 +385,20 @@ class Controller(QObject):
         self.panel.set_running(self.enabled, ready, hint)
         self.toggle_action.setText("หยุดแปล" if self.enabled else "เริ่มแปล")
         self.tray.setToolTip("game-lens — " + hint)
+
+    def set_model_size(self, size: str):
+        """The size of Hy-MT2 picked in the window: kept in settings.json, and the model is swapped now."""
+        self.settings.local_model = size
+        self.settings.save()
+        if not self.services.set_hymt(size):
+            self.refresh_panel()
+            return
+        if self.services.model_up("hymt"):  # still the old one: started outside game-lens (e.g. Llama for Windows)
+            self.panel.set_engine_status("โมเดลเดิมยังเปิดอยู่นอก game-lens — ปิดโปรแกรมนั้นก่อน แล้วกด 'เปิด' ที่ขั้น 1",
+                                         "warn")
+        elif self.profile.engine == "hymt" and self.settings.auto_start_server:
+            self.start_services()
+        self.refresh_panel()
 
     def set_engine(self, key: str):
         self.set_profile(engine=key)

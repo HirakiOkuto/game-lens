@@ -1027,3 +1027,31 @@ def test_a_font_that_is_not_there_is_said_and_another_used():
     p.show()
     p.close()
     assert closed == [1] and not p.isVisible()
+
+
+def test_a_screen_is_translated_in_parts_shown_as_they_come():
+    from gamelens.app import Controller
+    from gamelens.profile import Profile
+
+    img = np.full((300, 400, 3), (225, 215, 205), np.uint8)
+    groups = []
+    for i in range(10):
+        cv2.putText(img, "Label", (40, 25 + i * 27), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (90, 80, 70), 1, cv2.LINE_AA)
+        groups.append([{"id": f"l{i}", "bbox": [38, 12 + i * 27, 50, 18], "text": f"ラベル{i}"}])
+    reqs = [{"id": g[0]["id"], "src": g[0]["text"], "kind": "ui"} for g in groups]
+    asked, shown = [], []
+
+    class Api:
+        def translate_lines(self, part, **kw):
+            asked.append([r["id"] for r in part])
+            return {"lines": {r["id"]: "ป้าย" for r in part}, "engine": "index"}
+
+    class Fake:
+        PART = Controller.PART
+        translate_in_parts = Controller.translate_in_parts
+        api, profile, screen_gen = Api(), Profile(), 7
+        bridge = type("B", (), {"screen_part": type("S", (), {"emit": staticmethod(lambda gen, items: shown.append(len(items)))})()})()
+
+    res = Fake().translate_in_parts(reqs, groups, img, [g[0]["bbox"] for g in groups], 7)
+    assert asked == [["l0", "l1", "l2", "l3"], ["l4", "l5", "l6", "l7"], ["l8", "l9"]]  # from the top, a part at a time
+    assert shown == [4, 8] and len(res["lines"]) == 10  # (the last part comes with the whole screen)

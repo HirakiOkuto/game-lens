@@ -62,6 +62,7 @@ class Bridge(QObject):
     region_read = Signal(str, object, object)
     region_done = Signal(str, object, object)
     screen_done = Signal(int, object)
+    screen_part = Signal(int, object)  # the translations of a screen that are done so far
     message = Signal(str, str)
     status = Signal(dict)
     server_state = Signal(str, str)
@@ -164,6 +165,7 @@ class Controller(QObject):
         self.bridge.region_read.connect(self.on_region_read)
         self.bridge.region_done.connect(self.on_region_done)
         self.bridge.screen_done.connect(self.on_screen_done)
+        self.bridge.screen_part.connect(self.on_screen_part)
         self.bridge.message.connect(self._tray_message)
         self.bridge.status.connect(self.on_status)
         self.bridge.server_state.connect(lambda s, d: self.refresh_panel())
@@ -1011,11 +1013,10 @@ class Controller(QObject):
                 self.bridge.screen_done.emit(gen, None if auto else [])
                 return
             groups = paragraphs(lines)
-            res = self.api.translate_lines(requests(groups, p.src_lang), series=p.series, target=p.target,
-                                           src_lang=p.src_lang, engine=p.live_engine or p.engine, allow_cloud=p.engine in REMOTE,
-                                           context=[])
             reqs = requests(groups, p.src_lang)
-            items = screen_items(frame, groups, res["lines"], p.font_scale, [l["bbox"] for l in ocr["lines"]])
+            boxes = [l["bbox"] for l in ocr["lines"]]
+            res = self.translate_in_parts(reqs, groups, frame, boxes, gen)
+            items = screen_items(frame, groups, res["lines"], p.font_scale, boxes)
             src_of = {r["id"]: r["src"] for r in reqs}
             for it in items:
                 it._src = src_of.get(getattr(it, "_id", ""), "")
@@ -1025,6 +1026,46 @@ class Controller(QObject):
         except Exception as e:  # noqa: BLE001
             log.warning("screen: %s", e)
             self.bridge.screen_done.emit(gen, {"error": str(e)})
+
+    PART = 4  # menu translations shown as they come, a few at a time (the model serves 4 at once)
+
+    def translate_in_parts(self, reqs: list[dict], groups: list, frame: np.ndarray, boxes: list, gen: int) -> dict:
+        """Translate a screen's text in parts of a few lines, one part after another from the top; each part's
+        translations go on the screen as soon as they are there instead of after the last one. (A part fills the
+        model's 4 slots already: sent all at once, the parts would only queue and all end near the end.)"""
+        p = self.profile
+
+        def ask(part):
+            return self.api.translate_lines(part, series=p.series, target=p.target, src_lang=p.src_lang,
+                                            engine=p.live_engine or p.engine, allow_cloud=p.engine in REMOTE, context=[])
+
+        if len(reqs) <= self.PART:
+            return ask(reqs)
+        parts = [reqs[i : i + self.PART] for i in range(0, len(reqs), self.PART)]
+        lines, engines = {}, []
+        for part in parts:
+            if gen != self.screen_gen:
+                break  # the screen went away meanwhile
+            r = ask(part)
+            lines.update(r["lines"])
+            engines.append(r.get("engine", ""))
+            if len(lines) < len(reqs):
+                done = [g for g in groups if g[0]["id"] in lines]
+                self.bridge.screen_part.emit(gen, screen_items(frame, done, lines, p.font_scale, boxes))
+        return {"lines": lines, "engine": max(set(engines), key=engines.count) if engines else ""}
+
+    def show_screen_items(self, items: list):
+        """Put a screen's translations up; those already up (the same text in the same place) do not fade in again."""
+        kept = {(it.text, it.rect): it.born for it in self.overlay.items.get("screen", [])}
+        self.overlay.set_items("screen", items)
+        for it in items:
+            if (it.text, it.rect) in kept:
+                it.born = kept[(it.text, it.rect)]
+
+    def on_screen_part(self, gen: int, items):
+        if gen != self.screen_gen or self.screen_ref is None or not items:
+            return
+        self.show_screen_items(items)
 
     def on_screen_done(self, gen: int, items):
         self.screen_busy = False
@@ -1049,11 +1090,8 @@ class Controller(QObject):
             return
         if not items:
             self.toast(t("No text on the screen"), 2)
-        kept = {(it.text, it.rect): it.born for it in self.overlay.items.get("screen", [])}
-        self.overlay.set_items("screen", items)
-        for it in items:  # a translation that stayed up while the screen was read again does not fade in again
-            if (it.text, it.rect) in kept:
-                it.born = kept[(it.text, it.rect)]
+        self.show_screen_items(items)  # (what stayed up while the screen was read again does not fade in again)
+        for it in items:
             it._marks = text_marks(self.screen_frame, getattr(it, "_boxes", []))
         for it in items:  # into the history too: a menu's translation can be corrected there
             if getattr(it, "_src", ""):

@@ -1,0 +1,46 @@
+"""Build a zip to give game-lens to someone else: what is committed, without tests, without anything of this
+computer (keys, token, cache, logs, the Python environment). The model folder is the app's own `models/`.
+
+    .venv\Scripts\python.exe tools\make_zip.py            -> dist\game-lens-<date>.zip
+"""
+from __future__ import annotations
+
+import io
+import json
+import subprocess
+import sys
+import zipfile
+from datetime import date
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+LEAVE_OUT = ("tests/", "server/tests/", "tools/make_zip.py")
+
+
+def main():
+    if subprocess.run(["git", "diff", "--quiet", "HEAD", "--", ".", ":!settings.json"], cwd=ROOT).returncode:
+        print("note: uncommitted changes are not in the zip (it is built from the last commit)")
+    raw = subprocess.run(["git", "archive", "--format=zip", "HEAD"], cwd=ROOT, capture_output=True, check=True).stdout
+    out = ROOT / "dist" / f"game-lens-{date.today():%Y%m%d}.zip"
+    out.parent.mkdir(exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(raw)) as src, zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as dst:
+        for info in src.infolist():
+            name = info.filename
+            if info.is_dir() or name.startswith(LEAVE_OUT):
+                continue
+            data = src.read(info)
+            if name == "settings.json":  # models in the app's own folder, not this computer's shared one
+                s = json.loads(data)
+                s["models_dir"] = "models"
+                data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
+            dst.writestr("game-lens/" + name, data)
+        dst.writestr("game-lens/models/วางไฟล์โมเดล .gguf ไว้ที่นี่.txt",
+                     "setup.bat ดาวน์โหลด Hy-MT2-7B-Q4_K_M.gguf มาไว้ที่นี่ให้เอง\r\n".encode("utf-8"))
+    names = zipfile.ZipFile(out).namelist()
+    bad = [n for n in names if any(k in n for k in ("token", "keys.json", ".sqlite", ".venv/", "logs/"))]
+    assert not bad, bad
+    print(f"{out}  ({out.stat().st_size / 1e6:.1f} MB, {len(names)} files)")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

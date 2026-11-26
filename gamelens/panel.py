@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import webbrowser
 
-from PySide6.QtCore import QMargins, Qt, Signal
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtCore import QMargins, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont, QFontDatabase
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
 
@@ -72,6 +72,74 @@ class Step(QWidget):
             self.button.show()
 
 
+# keys a shortcut can be: Qt key -> the name win32.parse_hotkey knows
+KEY_NAMES = {**{getattr(Qt.Key, f"Key_F{i}"): f"F{i}" for i in range(1, 13)},
+             **{getattr(Qt.Key, f"Key_{c}"): c for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"},
+             Qt.Key.Key_Insert: "Insert", Qt.Key.Key_Home: "Home", Qt.Key.Key_End: "End", Qt.Key.Key_PageUp: "PageUp",
+             Qt.Key.Key_PageDown: "PageDown", Qt.Key.Key_Pause: "Pause", Qt.Key.Key_Space: "Space", Qt.Key.Key_Tab: "Tab"}
+ALONE_OK = {"F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "Home", "End", "PageUp",
+            "PageDown", "Pause"}
+
+
+class KeyButton(QPushButton):
+    """Shows a shortcut; clicked, it takes the next key press (with Ctrl / Alt / Shift) as the new one.
+    plain: one key without modifiers only (the key held to see the original is read as one key)."""
+
+    changed = Signal(str, str)  # name, new key
+    capturing = Signal(bool)
+
+    def __init__(self, name: str, spec: str, plain: bool = False):
+        super().__init__(spec)
+        self.name, self.spec, self.plain, self.taking = name, spec, plain, False
+        self.setToolTip(t("Click, then press the new key"))
+        self.clicked.connect(self._start)
+
+    def set_spec(self, spec: str):
+        self.spec = spec
+        if not self.taking:
+            self.setText(spec)
+
+    def _start(self):
+        if self.taking:
+            return
+        self.taking = True
+        self.setText(t("Press a key… (Esc: cancel)"))
+        self.grabKeyboard()
+        self.capturing.emit(True)
+
+    def _stop(self, new: str = ""):
+        self.taking = False
+        self.releaseKeyboard()
+        self.setText(new or self.spec)
+        if new and new != self.spec:
+            self.spec = new
+            self.changed.emit(self.name, new)
+        self.capturing.emit(False)
+
+    def keyPressEvent(self, e):
+        if not self.taking:
+            return super().keyPressEvent(e)
+        k = e.key()
+        if k == Qt.Key.Key_Escape:
+            return self._stop()
+        name = KEY_NAMES.get(k)
+        if name is None:
+            return  # a modifier on its own (wait for the key), or a key that cannot be a shortcut
+        mods = e.modifiers()
+        parts = [] if self.plain else [m for m, f in (("Ctrl", Qt.KeyboardModifier.ControlModifier),
+                                                      ("Alt", Qt.KeyboardModifier.AltModifier),
+                                                      ("Shift", Qt.KeyboardModifier.ShiftModifier)) if mods & f]
+        if not self.plain and not parts and name not in ALONE_OK:
+            self.setText(t("A letter needs Ctrl or Alt (the game uses it)"))
+            return
+        self._stop("+".join(parts + [name]))
+
+    def focusOutEvent(self, e):
+        if self.taking:
+            self._stop()
+        super().focusOutEvent(e)
+
+
 class Panel(QWidget):
     toggle = Signal()
     fix_server = Signal()
@@ -87,6 +155,8 @@ class Panel(QWidget):
     src_lang_changed = Signal(str)
     toasts_changed = Signal(bool)
     english_keys_changed = Signal(bool)
+    hotkey_changed = Signal(str, str)
+    taking_key = Signal(bool)
     ui_lang_changed = Signal(str)
     auto_screen_changed = Signal(bool)
     show_history = Signal()
@@ -167,17 +237,24 @@ class Panel(QWidget):
         self.engine_desc.setWordWrap(True)
         # which size of the local model (only for Hy-MT2)
         self.size_box = QWidget()
-        szl = QHBoxLayout(self.size_box)
-        szl.setContentsMargins(0, 0, 0, 0)
+        szv = QVBoxLayout(self.size_box)
+        szv.setContentsMargins(0, 0, 0, 0)
+        szv.setSpacing(2)
+        szl = QHBoxLayout()
         szl.addWidget(QLabel(t("Model")))
         self.size = QComboBox()
-        for label, key in (("Automatic, by graphics card", "auto"),
-                           ("Index-Translate 9B — most natural • ~5.5 GB graphics memory • 5.8 GB download", "index"),
-                           ("Hy-MT2 7B — ~5.5 GB graphics memory • 4.6 GB download", "7b"),
-                           ("Hy-MT2 1.8B — fast, ~2 GB graphics memory or CPU • lower quality • 1.1 GB download", "1.8b")):
+        # short names in the list (it is narrow); what each needs is written under it
+        for label, key in (("Automatic, by graphics card", "auto"), ("Index-Translate 9B", "index"),
+                           ("Hy-MT2 7B", "7b"), ("Hy-MT2 1.8B", "1.8b")):
             self.size.addItem(t(label), key)
-        self.size.currentIndexChanged.connect(lambda _: self.model_size_changed.emit(self.size.currentData()))
+        self.size.currentIndexChanged.connect(lambda _: (self._size_note(), self.model_size_changed.emit(self.size.currentData())))
         szl.addWidget(self.size, 1)
+        szv.addLayout(szl)
+        self.size_note = QLabel("")
+        self.size_note.setObjectName("muted")
+        self.size_note.setWordWrap(True)
+        szv.addWidget(self.size_note)
+        self.auto_label = ""
         self.key_box = QWidget()
         kl = QGridLayout(self.key_box)
         kl.setContentsMargins(0, 2, 0, 2)
@@ -264,6 +341,22 @@ class Panel(QWidget):
         self.english = QCheckBox(t("Switch the keyboard to English while in the game"))
         self.english.setToolTip(t("A Thai keyboard makes the game show its key hints as boxes □"))
         self.english.toggled.connect(self.english_keys_changed.emit)
+        self.english_note = QWidget()
+        enl = QVBoxLayout(self.english_note)
+        enl.setContentsMargins(26, 0, 0, 0)
+        enl.setSpacing(2)
+        note = QLabel(t("Not possible with this game (it runs as administrator): set it once in Windows instead — "
+                        "nothing to do if done already."))
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        go = QPushButton(t("Open the Windows keyboard settings ↗"))
+        go.setObjectName("link")
+        go.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("ms-settings:typing")))
+        go.setToolTip(t("Advanced keyboard settings → Override for default input method: English, and tick “Let me use "
+                        "a different input method for each app window”. Then open the game again."))
+        enl.addWidget(note)
+        enl.addWidget(go)
+        self.english_note.hide()
         self.auto = QCheckBox(t("Translate menus automatically when the screen is still"))
         self.auto.setToolTip(t("When the whole screen stands still, e.g. a menu is open, all its text is translated.\n"
                                "This uses the translator more: mind the quota of a paid API."))
@@ -273,16 +366,20 @@ class Panel(QWidget):
         opts, ol = card(t("While playing"))
         ol.addWidget(self.auto)
         ol.addWidget(self.english)
+        ol.addWidget(self.english_note)
 
         # hotkeys
         keys, kl2 = card(t("Keys while playing"))
         grid = QGridLayout()
-        rows = [(peek_key, t("hold: show the original")), (hotkeys.get("toggle", ""), t("start / stop")),
-                (hotkeys.get("screen", ""), t("translate the screen")),
-                (hotkeys.get("regions", ""), t("set regions")), (hotkeys.get("history", ""), t("history"))]
-        for i, (k, what) in enumerate(rows):
-            kk = QLabel(k)
-            kk.setStyleSheet("background:#262a33; border:1px solid #343a46; border-radius:6px; padding:1px 7px;")
+        rows = [("peek", peek_key, t("hold: show the original")), ("toggle", hotkeys.get("toggle", ""), t("start / stop")),
+                ("screen", hotkeys.get("screen", ""), t("translate the screen")),
+                ("regions", hotkeys.get("regions", ""), t("set regions")), ("history", hotkeys.get("history", ""), t("history"))]
+        self.key_buttons: dict[str, KeyButton] = {}
+        for i, (name, k, what) in enumerate(rows):
+            kk = KeyButton(name, k, plain=name == "peek")
+            kk.changed.connect(self.hotkey_changed.emit)
+            kk.capturing.connect(self.taking_key.emit)
+            self.key_buttons[name] = kk
             w = QLabel(what)
             w.setObjectName("muted")
             grid.addWidget(kk, i // 2, (i % 2) * 2, Qt.AlignmentFlag.AlignLeft)
@@ -291,6 +388,9 @@ class Panel(QWidget):
         grid.setColumnStretch(3, 1)
         grid.setHorizontalSpacing(8)
         kl2.addLayout(grid)
+        khint = QLabel(t("Click a key to change it"))
+        khint.setObjectName("muted")
+        kl2.addWidget(khint)
         self.keys_card = keys
         keys.hide()
 
@@ -362,10 +462,10 @@ class Panel(QWidget):
         self.auto.setChecked(auto_screen)
         self.auto.blockSignals(False)
         self.size.blockSignals(True)
-        if auto_label:
-            self.size.setItemText(0, t("Automatic — this computer: {label}", label=auto_label))
+        self.auto_label = auto_label
         self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
         self.size.blockSignals(False)
+        self._size_note()
         for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(True)
         self.english.setChecked(english_keys)
@@ -402,14 +502,17 @@ class Panel(QWidget):
                     self.key_edits[n].clear()
                     self.key_edits[n].setPlaceholderText(t("set ({value})", value=v) if v else t("paste the key here"))
 
+    def set_hotkeys(self, hotkeys: dict, peek_key: str):
+        for name, b in self.key_buttons.items():
+            b.set_spec(peek_key if name == "peek" else hotkeys.get(name, ""))
+
     def set_english_available(self, ok: bool, checked: bool):
         """The keyboard switch greys out where Windows does not let it work (a game running as administrator)."""
         self.english.blockSignals(True)
         self.english.setEnabled(ok)
         self.english.setChecked(checked and ok)
-        self.english.setToolTip(t("A Thai keyboard makes the game show its key hints as boxes □") if ok else
-                                t("Not possible with this game: it runs as administrator. Set Windows to keep an "
-                                  "English keyboard for it (see README)"))
+        self.english.setToolTip(t("A Thai keyboard makes the game show its key hints as boxes □"))
+        self.english_note.setVisible(not ok)
         self.english.blockSignals(False)
 
     def set_engine_status(self, text: str, state: str = "idle"):
@@ -419,6 +522,18 @@ class Panel(QWidget):
     # --- internal ---------------------------------------------------------------------------------------------
     SAMPLES = {"th": "ผู้บัญชาการคะ ไปเดินเล่นกันไหม? HP +120",
                "en": "Commander, shall we go for a walk? HP +120"}
+
+    SIZE_NOTES = {"index": "Most natural • ~5.5 GB graphics memory • 5.8 GB download",
+                  "7b": "~5.5 GB graphics memory • 4.6 GB download",
+                  "1.8b": "Fast • ~2 GB graphics memory, or the CPU • lower quality • 1.1 GB download"}
+
+    def _size_note(self):
+        key = self.size.currentData()
+        if key == "auto":
+            self.size_note.setText(t("This computer: {label}", label=self.auto_label) if self.auto_label else "")
+        else:
+            self.size_note.setText(t(self.SIZE_NOTES[key]))
+        self.size_note.setVisible(bool(self.size_note.text()))
 
     def _for_target(self, target: str):
         name = self.target.itemText(max(0, self.target.findData(target)))

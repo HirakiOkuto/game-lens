@@ -930,3 +930,41 @@ def test_the_text_reader_files_for_each_game_language():
     ko = [p.name for p, _, _ in ocr_files("ko")]
     assert "korean_PP-OCRv5_rec_mobile.onnx" in ko and "PP-OCRv6_rec_medium.onnx" not in ko
     assert all(u.startswith("https://") and len(s) == 64 for _, u, s in ocr_files("ja"))
+
+
+def test_a_correction_goes_into_the_glossary_file(tmp_path):
+    from gamelens.glossary import add_correction
+
+    path = tmp_path / "game.th.json"
+    path.write_text(json.dumps({"_about": "x", "characters": [{"src": "アニス", "aliases": ["アニ"], "tl": "Anis",
+                                                                "gender": "", "role": "", "source": "fan"}],
+                                "terms": [{"src": "マウント", "reading": "", "tl": "ติดตั้ง", "note": "", "source": "x"}]},
+                               ensure_ascii=False), encoding="utf-8")
+    add_correction(path, "マウント", "พาหนะ", "term")  # replaces the term
+    add_correction(path, "アニ", "Anais", "female")  # an alias: corrects that character
+    add_correction(path, "キャベッコ", "Cabbecco", "neutral")  # a new name
+    d = json.loads(path.read_text(encoding="utf-8"))
+    assert [x["tl"] for x in d["terms"]] == ["พาหนะ"]
+    assert d["characters"][0]["tl"] == "Anais" and d["characters"][0]["gender"] == "female"
+    assert d["characters"][1] == {"src": "キャベッコ", "aliases": [], "tl": "Cabbecco", "gender": "", "role": "", "source": "user"}
+    add_correction(path, "キャベッコ", "แคเบ็กโกะ", "term")  # now a term: no longer a character
+    d = json.loads(path.read_text(encoding="utf-8"))
+    assert [c["src"] for c in d["characters"]] == ["アニス"] and d["terms"][-1]["tl"] == "แคเบ็กโกะ"
+    assert path.read_text(encoding="utf-8").count("\n") == 10  # one entry per line, as people edit it
+    add_correction(tmp_path / "new.en.json", "総合評価", "Overall", "term")  # no file yet
+    assert json.loads((tmp_path / "new.en.json").read_text(encoding="utf-8"))["terms"][0]["tl"] == "Overall"
+
+
+def test_menu_text_is_logged_once_and_items_know_their_line(tmp_path):
+    from gamelens.history import HistoryLog
+    from gamelens.screen import screen_items
+
+    h = HistoryLog(tmp_path, "g")
+    assert h.add("ui", "整理", "จัดระเบียบ", "index") and h.add("ui", "整理", "จัดระเบียบ", "index") is None
+    assert h.add("dialog", "はい", "ครับ", "index") and h.add("dialog", "はい", "ครับ", "index")  # dialogue repeats
+    img = np.full((200, 400, 3), (225, 215, 205), np.uint8)
+    cv2.putText(img, "Label", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    cv2.putText(img, "Other", (40, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (90, 80, 70), 1, cv2.LINE_AA)
+    groups = [[{"id": "a", "bbox": [38, 44, 56, 20], "text": "ラベル"}], [{"id": "b", "bbox": [38, 134, 56, 20], "text": "他"}]]
+    items = screen_items(img, groups, {"b": "อื่น"}, 0.9)
+    assert [it._id for it in items] == ["b"]

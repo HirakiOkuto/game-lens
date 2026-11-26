@@ -203,6 +203,7 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
     others: boxes of every line on the screen (numbers too), which a widened translation must not cover."""
     others = others if others is not None else [l["bbox"] for g in groups for l in g]
     done = []
+    own_id = {id(g[0]["bbox"]): g[0]["id"] for g in groups}
     for g in groups:
         tl = translations.get(g[0]["id"], "").strip()
         looks = [a for l in g if (a := analyze_line(frame, l["bbox"])) is not None]
@@ -223,6 +224,7 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
         items.append(Item(rect=rect, text=tl, fg=a.fg, outline=outline_for(a.fg, a.bg, all(k.calm for k in looks)),
                           max_px=size, align=align, vcenter=len(looks) == 1))
         items[-1]._boxes = [k.box for k in looks]  # where the original text is (to notice when it changes)
+        items[-1]._id = own_id[id(own)]  # which group (request) it translates
     patch = erase_lines(frame, [a for _, looks, _ in done for a in looks])
     if patch is not None:
         items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)

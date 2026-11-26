@@ -401,6 +401,11 @@ def test_hymt_retries_with_stand_ins_when_a_name_is_transliterated(monkeypatch):
     assert "[Reference Translations]\nミイティ translates to Mitty" in sent[0] and "Reference" not in sent[1]
     sent.clear()
     assert e.translate_page(["ノノ", "行こう"], "ja", "th", [], g, style="game") == ["Nono จ้ะ", "ไปกัน"] and len(sent) == 2
+    assert "ไปกัน" not in sent[0] and "Nono จ้ะ" in sent[1]  # dialogue: the line before is context
+    sent.clear()
+    ctx = [{"src": "おはよう", "tl": "อรุณสวัสดิ์"}]
+    e.translate_page(["ノノ", "行こう"], "ja", "th", ctx, g, style="game", kinds=["ui", "ui"])
+    assert not any("อรุณสวัสดิ์" in p or "Nono จ้ะ" in p for p in sent)  # menu labels: each on its own
     # a stand-in that gets lost: keep the first answer rather than a broken one
     monkeypatch.setattr(engines.HyMtEngine, "_ask", lambda self, p: "พ่อของมิตตี้")
     assert e.translate_page(["ミイティの父"], "ja", "th", [], g, style="game") == ["พ่อของมิตตี้"]

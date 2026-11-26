@@ -169,7 +169,9 @@ class TranslateLinesReq(BaseModel):
 
 
 def line_key(src: str, kind: str, text: str) -> str:
-    return hashlib.sha1(f"{src}|{kind}|{text}".encode()).hexdigest()
+    # menu text is cached under "ui2": translations made while the labels before one were its context (which
+    # copied their translations into it) are not used any more
+    return hashlib.sha1(f"{src}|{'ui2' if kind == 'ui' else kind}|{text}".encode()).hexdigest()
 
 
 @app.post("/translate/lines", dependencies=[Depends(auth)])

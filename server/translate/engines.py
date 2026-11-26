@@ -261,13 +261,17 @@ class PlamoTranslateEngine:
         return p
 
     def translate_page(self, texts: list[str], src: str, target: str, context: list[dict], glossary: dict,
-                       style: str = "manga") -> list[str]:
+                       style: str = "manga", kinds: list[str] | None = None) -> list[str]:
+        """kinds: per text; "ui" (menu labels, read off a whole screen) are translated each on its own - the
+        labels before one are no context for it, and the model would copy their translations into its answer."""
         terms = glossary_terms(glossary)
         history = [(c["src"], c["tl"]) for c in context if c.get("src") and c.get("tl")]
+        kinds = kinds or [""] * len(texts)
         out = []
-        for text in texts:  # sequential: each box sees the translations of the boxes before it
+        for text, kind in zip(texts, kinds):  # sequential: each box sees the translations of the boxes before it
             used = terms_in_text(text, terms)  # only terms that occur in this box
-            body = {"prompt": self._prompt(text, history, used, src, target, style), "n_predict": 512, "temperature": 0,
+            seen = [] if kind == "ui" else history
+            body = {"prompt": self._prompt(text, seen, used, src, target, style), "n_predict": 512, "temperature": 0,
                     "stop": [self.TAG, "<|plamo:bos|>"], "cache_prompt": True}
             try:
                 r = httpx.post(f"{self.url}/completion", json=body, timeout=120)
@@ -275,9 +279,9 @@ class PlamoTranslateEngine:
                 raise EngineError(f"PLaMo Translate unreachable at {self.url}: {e}") from e
             if r.status_code != 200:
                 raise EngineError(f"PLaMo Translate HTTP {r.status_code}: {r.text[:200]}")
-            tl = echo_guard(self._clean(r.json().get("content", "")), text, history)
+            tl = echo_guard(self._clean(r.json().get("content", "")), text, seen)
             out.append(tl)
-            if tl:
+            if tl and kind != "ui":
                 history.append((text, tl))
         return out
 
@@ -423,20 +427,24 @@ class HyMtEngine:
         return out
 
     def translate_page(self, texts: list[str], src: str, target: str, context: list[dict], glossary: dict,
-                       style: str = "manga") -> list[str]:
+                       style: str = "manga", kinds: list[str] | None = None) -> list[str]:
+        """kinds: per text; "ui" (menu labels, read off a whole screen) are translated each on its own - the
+        labels before one are no context for it, and the model would copy their translations into its answer."""
         terms = glossary_terms(glossary)
         history = [(c["src"], c["tl"]) for c in context if c.get("src") and c.get("tl")]
+        kinds = kinds or [""] * len(texts)
         out = []
-        for text in texts:
+        for text, kind in zip(texts, kinds):
             used = terms_in_text(text, terms)
-            tl = echo_guard(self._ask(self._prompt(text, history, used, target, style)), text, history)
-            if not tl and history:  # it repeated an earlier line: ask again without them
+            seen = [] if kind == "ui" else history
+            tl = echo_guard(self._ask(self._prompt(text, seen, used, target, style)), text, seen)
+            if not tl and seen:  # it repeated an earlier line: ask again without them
                 tl = self._ask(self._prompt(text, [], used, target, style))
             if tl and any(b not in tl for _, b in used):
                 # a name came out transliterated: once more with stand-ins (these lose some meaning, so only now)
-                tl = self._with_slots(text, history, used, target, style) or tl
+                tl = self._with_slots(text, seen, used, target, style) or tl
             out.append(tl)
-            if tl:
+            if tl and kind != "ui":
                 history.append((text, tl))
         return out
 
@@ -648,8 +656,11 @@ def _translate_blocks(
         if hasattr(eng, "translate_page"):  # page-aware translation models (PLaMo, Hy-MT)
             t0 = time.perf_counter()
             try:
+                import inspect
+
+                extra = {"kinds": [b.get("kind", "") for b in todo]} if "kinds" in inspect.signature(eng.translate_page).parameters else {}
                 tls = eng.translate_page([b["src"] for b in todo], src, target, context, glossary or {},
-                                         style="game" if game else "manga")
+                                         style="game" if game else "manga", **extra)
             except EngineError as e:
                 errors.append(f"{name}: {e}")
                 continue

@@ -6,7 +6,7 @@
   "src_lang": "ja",
   "target": "th",
   "engine": "hymt",
-  "font_family": "Leelawadee UI",
+  "font_family": "Bai Jamjuree",
   "font_scale": 0.9,
   "stable_ms": 400,
   "max_wait_ms": 4000,

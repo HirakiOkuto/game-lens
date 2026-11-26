@@ -53,7 +53,7 @@ class Profile:
     src_lang: str = "ja"
     target: str = "th"
     engine: str = "hymt"
-    font_family: str = "Leelawadee UI"
+    font_family: str = "Bai Jamjuree"  # comes with game-lens (fonts/)
     font_scale: float = 0.9  # Thai size relative to the Japanese line height
     # how the player's own character speaks (answers, lines without a name): neutral = no ครับ / ค่ะ at all, so it fits
     # whoever plays; female / male; "" = as translated

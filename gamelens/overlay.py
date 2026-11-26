@@ -82,7 +82,7 @@ def _layout(text: str, font: QFont, width: float):
 
 
 class Overlay(QWidget):
-    def __init__(self, family: str = "Leelawadee UI"):
+    def __init__(self, family: str = "Bai Jamjuree"):
         super().__init__(None)
         self.family = family
         self.setWindowFlags(

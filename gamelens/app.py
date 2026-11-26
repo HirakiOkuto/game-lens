@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from pathlib import Path
 
+import cv2
 import numpy as np
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap
@@ -36,7 +37,7 @@ from .screen import (TextSize, begins, marks_unchanged, text_marks, text_state, 
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
-from .watcher import TextFollower, auto_pause, changed_pixels, plain_text, stroke_change, goes_on, ink_map, similar, stroke_map
+from .watcher import ScreenCalm, SteadyTiles, TextFollower, auto_pause, changed_pixels, plain_text, stroke_change, goes_on, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
 INSTANCE_KEY = os.environ.get("GAMELENS_INSTANCE", "game-lens-ui")  # one running copy per key (tests use their own)
@@ -198,6 +199,8 @@ class Controller(QObject):
         self.screen_frame: np.ndarray | None = None
         self.screen_marks: list = []  # what the translated text looked like (see text_state)
         self.screen_strokes = self.screen_last = None
+        self.screen_thumb = None
+        self.screen_tiles = None
         self.screen_quiet = 0.0
         self.screen_count = 0  # lines of the screen being read (known once its text is read): many = a menu
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
@@ -213,6 +216,7 @@ class Controller(QObject):
         # automatic whole-screen translation (menus, quest lists): when the whole picture stands still
         self.auto_screen = self.settings.auto_screen or os.environ.get("GAMELENS_AUTO_SCREEN") == "1"
         self.auto_prev: np.ndarray | None = None
+        self.auto_calm = ScreenCalm()
         self.auto_done: np.ndarray | None = None  # the screen we last translated (or tried to)
         self.auto_still_since = 0.0
         self.peek_vk = win32.parse_hotkey(self.settings.peek_key)[1]
@@ -978,6 +982,8 @@ class Controller(QObject):
         self.screen_ref = ref
         self.screen_frame, self.screen_marks = frame, []
         self.screen_strokes, self.screen_last = stroke_map(frame, "any"), None  # to notice text that appears later
+        self.screen_tiles = SteadyTiles(self.screen_strokes)
+        self.screen_thumb = thumbnail(frame)
         self.auto_done = stroke_map(frame, "any")  # this text is handled: auto mode will not start on it again
         self.overlay.set_pending("screen", (frame.shape[1] // 2 + 21, 60))
         if not auto:
@@ -996,14 +1002,17 @@ class Controller(QObject):
         often has a character moving in it. Text is thin strokes that stay put; the 3D world's are everywhere and
         never still."""
         s = stroke_map(frame, "any")
-        prev, self.auto_prev = self.auto_prev, s
-        if prev is None or prev.shape != s.shape or stroke_change(prev, s) > STILL:
+        self.auto_prev = s
+        share, woke = self.auto_calm.feed(s)
+        # (still: a third of the strokes stand in tiles that have not moved for a while, none of them just moved.
+        # Walking or turning the camera moves everything; grass waving under a menu moves only its own tiles)
+        if woke or share < 0.3:
             self.auto_still_since = now
             return
         if self.screen_busy or self.screen_ref is not None or not self.health or self.services.state == "starting":
             return
         if self.auto_done is not None and self.auto_done.shape == s.shape:
-            changed = stroke_change(self.auto_done, s)
+            changed = self.auto_calm.differs(self.auto_done, s)  # (in the parts that stand still)
             if changed <= STILL:
                 return  # handled already
             if changed > 0.6:
@@ -1117,7 +1126,7 @@ class Controller(QObject):
             self.toast(t("No text on the screen"), 2)
         self.show_screen_items(items)  # (what stayed up while the screen was read again does not fade in again)
         for it in items:
-            it._marks = text_marks(self.screen_frame, getattr(it, "_boxes", []))
+            it._marks = text_marks(self.screen_frame, getattr(it, "_boxes", []), masks=getattr(it, "_masks", None))
         for it in items:  # into the history too: a menu's translation can be corrected there
             if getattr(it, "_src", ""):
                 e = self.history.add("ui", it._src, it.text, self.screen_engine)
@@ -1131,7 +1140,8 @@ class Controller(QObject):
                 self.overlay.set_pending(r.id, None)
             self.shown.clear()
             self.reset_watchers_keep_overlay()
-        self.screen_marks = text_marks(self.screen_frame, [b for it in items for b in getattr(it, "_boxes", [])])
+        self.screen_marks = text_marks(self.screen_frame, [b for it in items for b in getattr(it, "_boxes", [])],
+                                       masks=[m for it in items for m in getattr(it, "_masks", [None] * len(it._boxes))])
 
     def check_screen_dismiss(self, frame: np.ndarray):
         if win32.key_down(win32.VK["ESC"]):
@@ -1142,8 +1152,8 @@ class Controller(QObject):
             strokes = stroke_map(frame, "any")
             last, self.screen_last = self.screen_last, strokes
             # text the translation does not cover appeared (a pop-up, another tab): its strokes differ from the
-            # picture that was read, tile by tile, though the screen itself has come to rest
-            new_text = stroke_change(self.screen_strokes, strokes) > STILL and time.monotonic() > self.screen_quiet
+            # picture that was read, in the parts of the screen that stand still (not grass waving, water, a Kibo)
+            new_text = self.screen_tiles.feed(strokes) > 0.5 and time.monotonic() > self.screen_quiet  # (pop-ups: ~0.9)
             if state == "gone":  # another page, a closed menu
                 self.dismiss_screen()
                 self.auto_done = None
@@ -1161,7 +1171,8 @@ class Controller(QObject):
         # still being read: only a quite different screen counts (its text, not a background that moves). The
         # reading is given up then, and the screen is not "handled": auto mode reads what is there once it is still
         # (what was translated already comes from the cache)
-        if stroke_change(self.screen_strokes, stroke_map(frame, "any")) > 0.6:
+        # (the picture as a whole, coarsely: grass waving in the wind or a character moving is the same screen)
+        if float(np.abs(thumbnail(frame) - self.screen_thumb).mean()) > 22:
             self.dismiss_screen()
             self.auto_done = None
 
@@ -1295,6 +1306,12 @@ class Controller(QObject):
             return
         n = len(r["proposed"].get("characters", [])) + len(r["proposed"].get("terms", []))
         self.notify(t("Glossary updated"), t("{n} names / terms found — they are translated the same way every time", n=n))
+
+
+def thumbnail(frame: np.ndarray) -> np.ndarray:
+    """The picture's brightness at 48 x 27: what a different screen changes and a waving scene does not."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    return cv2.resize(gray, (48, 27), interpolation=cv2.INTER_AREA).astype(np.float32)
 
 
 def load_fonts():

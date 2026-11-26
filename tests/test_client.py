@@ -1120,3 +1120,26 @@ def test_light_text_over_the_scene_is_found_whole():
     x0 = a.mask_box[0]
     # letters are found from the first (the coloured 押して) to the last (謎解きする), not only in the middle
     assert cols[90 - x0 : 140 - x0].any() and cols[470 - x0 : 510 - x0].any()
+
+
+def test_new_text_is_told_from_a_screen_that_moves_by_itself():
+    from gamelens.watcher import SteadyTiles
+
+    rng = np.random.default_rng(1)
+    base = np.zeros((90, 160), bool)
+    base[10:14, 20:60] = True  # the menu's text
+    looks = []
+    for i in range(40):  # grass waving in the lower half: different strokes every look
+        f = base.copy()
+        f[50:90] = rng.random((40, 160)) < 0.2
+        looks.append(f)
+    st = SteadyTiles(looks[0])
+    assert max(st.feed(f) for f in looks[1:]) <= 0.5
+    popup = looks[-1].copy()
+    popup[20:45, 40:120] = rng.random((25, 80)) < 0.3  # a pop-up opens over the still part, then stands
+    vals = []
+    for _ in range(25):
+        g = popup.copy()
+        g[50:90] = rng.random((40, 160)) < 0.2
+        vals.append(st.feed(g))
+    assert vals[-1] > 0.5

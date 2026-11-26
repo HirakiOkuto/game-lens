@@ -38,9 +38,11 @@ def lines_to_translate(lines: list[dict], skip: list, src_lang: str = "ja", min_
             and not in_any(l["bbox"], skip)]
 
 
-def text_marks(frame: np.ndarray, boxes, texts=None) -> list:
+def text_marks(frame: np.ndarray, boxes, texts=None, masks=None) -> list:
     """What the text in each box looks like (its edges), and about how many letters it has (box width / height
-    unless the texts are given): kept to tell later whether that text is still there."""
+    unless the texts are given): kept to tell later whether that text is still there. masks: for each box the
+    glyphs found there ((mask, mask_box) of a Line, or None): only the edges of the letters count then, not those
+    of the grass waving behind them."""
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     out = []
     for i, (x, y, w, h) in enumerate(boxes):
@@ -48,7 +50,18 @@ def text_marks(frame: np.ndarray, boxes, texts=None) -> list:
         crop = gray[y0 : y0 + int(h), x0 : x0 + int(w)]
         if crop.size:
             n = len(texts[i]) if texts else max(1, int(w) // max(1, int(h)))
-            out.append(((x0, y0, crop.shape[1], crop.shape[0]), cv2.Canny(crop, 60, 160) > 0, n))
+            edges = cv2.Canny(crop, 60, 160) > 0
+            if masks and masks[i] is not None:
+                m, (mx0, my0, mx1, my1) = masks[i]
+                near = np.zeros(crop.shape, bool)
+                sx0, sy0 = max(x0, mx0), max(y0, my0)
+                sx1, sy1 = min(x0 + crop.shape[1], mx1), min(y0 + crop.shape[0], my1)
+                if sx1 > sx0 and sy1 > sy0:
+                    near[sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = m[sy0 - my0 : sy1 - my0, sx0 - mx0 : sx1 - mx0] > 0
+                    near = cv2.dilate(near.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+                    if (edges & near).sum() >= 0.3 * edges.sum() or (edges & near).sum() >= 20:
+                        edges = edges & near
+            out.append(((x0, y0, crop.shape[1], crop.shape[0]), edges, n))
     return out
 
 
@@ -297,6 +310,7 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
                           max_px=size, align=align, vcenter=len(looks) == 1))
         items[-1].angle = t["tilt"] if t else 0.0
         items[-1]._boxes = [k.box for k in looks]  # where the original text is (to notice when it changes)
+        items[-1]._masks = [(k.mask, k.mask_box) for k in looks]  # ...and its letters there
         items[-1]._id = own_id[id(own)]  # which group (request) it translates
     keep_apart(items)
     patch = erase_lines(frame, [a for _, looks, _ in done for a in looks])

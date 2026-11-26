@@ -45,6 +45,87 @@ def auto_pause(settled_kinds: set[str], empties: int) -> float:
     return max(need, min(8.0, 2.0 ** empties) if empties else 0.0)
 
 
+def tile_changes(a: np.ndarray, b: np.ndarray, rows: int = 9, cols: int = 16) -> tuple[np.ndarray, np.ndarray]:
+    """Per tile: whether its strokes changed (more than a quarter of them), and how many strokes it has."""
+    changed = np.zeros((rows, cols), bool)
+    weight = np.zeros((rows, cols), np.int64)
+    if a.shape != b.shape:
+        return np.ones((rows, cols), bool), np.ones((rows, cols), np.int64)
+    h, w = a.shape
+    for r in range(rows):
+        for c in range(cols):
+            ta = a[r * h // rows : (r + 1) * h // rows, c * w // cols : (c + 1) * w // cols]
+            tb = b[r * h // rows : (r + 1) * h // rows, c * w // cols : (c + 1) * w // cols]
+            n = max(int(ta.sum()), int(tb.sum()))
+            weight[r, c] = n
+            changed[r, c] = bool(n) and (ta ^ tb).sum() > 0.25 * n
+    return changed, weight
+
+
+class SteadyTiles:
+    """Which parts of the screen keep moving on their own (grass in the wind, water, a character) while a screen
+    translation is up: there a difference from the picture that was read means nothing. New text (a pop-up, another
+    tab) changes tiles that then stand still: that is what counts."""
+
+    def __init__(self, first: np.ndarray):
+        self.ref = first
+        self.prev = first
+        self.restless = None  # per tile: frames of the last few in which it changed by itself
+        self.calm_for = 0
+
+    MEMORY = 16  # looks (about 0.8 s): a tile that changed by itself within them is not trusted
+
+    def feed(self, now: np.ndarray) -> float:
+        """Share of the strokes, in tiles that are calm now, that differ from the picture that was read."""
+        moving, _ = tile_changes(self.prev, now)
+        self.prev = now
+        self.restless = moving.astype(np.int16) * self.MEMORY if self.restless is None else np.where(moving, self.MEMORY, np.maximum(self.restless - 1, 0))
+        diff, weight = tile_changes(self.ref, now)
+        calm = self.restless == 0
+        total = int(weight[calm].sum())
+        return float(weight[calm & diff].sum()) / total if total else 0.0
+
+
+class ScreenCalm:
+    """Is the screen standing still, for reading it as a menu? Over the 3D world part of the screen never stands
+    still (grass in the wind, water, a Kibo bobbing): those tiles are left out once they keep moving. The screen is
+    still when a good part of its strokes lie in tiles that have not moved for a while, and none of those has just
+    started to move (a menu opening, a page turning: every tile it touches moves at once, then stands)."""
+
+    MEMORY = 16  # looks (about 0.8 s at 20 a second)
+
+    def __init__(self):
+        self.prev: np.ndarray | None = None
+        self.restless: np.ndarray | None = None
+
+    def feed(self, now: np.ndarray) -> tuple[float, bool]:
+        """(share of the strokes that lie in calm tiles, whether a calm tile with strokes has just moved)."""
+        if self.prev is None or self.prev.shape != now.shape:
+            self.prev, self.restless = now, None
+            return 0.0, True
+        moved, weight = tile_changes(self.prev, now)
+        self.prev = now
+        if self.restless is None:
+            self.restless = np.where(moved, self.MEMORY, 0)
+            return 0.0, True
+        # (a calm tile now and then moves by itself: a blade of grass. A menu opening or a page turning moves a good
+        # part of what stood still)
+        was_calm = self.restless == 0
+        woke = float(weight[moved & was_calm].sum()) > 0.15 * max(1, int(weight[was_calm].sum()))
+        self.restless = np.where(moved, self.MEMORY, np.maximum(self.restless - 1, 0))
+        calm = self.restless == 0
+        return float(weight[calm].sum()) / max(1, int(weight.sum())), woke
+
+    def differs(self, a: np.ndarray, b: np.ndarray) -> float:
+        """How much of the strokes in the calm tiles differ between two pictures (0 when nothing is calm)."""
+        if self.restless is None or a.shape != b.shape:
+            return 1.0
+        diff, weight = tile_changes(a, b)
+        calm = self.restless == 0
+        total = int(weight[calm].sum())
+        return float(weight[calm & diff].sum()) / total if total else 1.0
+
+
 def stroke_change(a: np.ndarray, b: np.ndarray, rows: int = 9, cols: int = 16) -> float:
     """How much of the screen's strokes are in parts of it that changed (0 = all the strokes stand still, 1 = none
     do). Judged tile by tile, so that a character moving in a menu leaves the menu's text "still", while the 3D

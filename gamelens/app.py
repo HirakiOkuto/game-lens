@@ -495,6 +495,9 @@ class Controller(QObject):
         self.shown_seq.clear()
         self.shown.clear()  # translate again with the new settings
         self.reset_watchers()
+        if "target" in kw or "series" in kw:  # that language's names and terms (glossaries/<series>.<target>.json)
+            self.genders = None
+            self.pool.submit(self.sync_glossary)
 
     def set_font_scale(self, v: float):
         self.profile.font_scale = v

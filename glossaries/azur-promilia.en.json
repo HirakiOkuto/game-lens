@@ -1,0 +1,48 @@
+{
+  "_about": "Names and terms for Azur Promilia (JP -> English). game-lens sends this file to its server at start when the translation language is English; edit 'tl' to change how a name is written. Character and Kibo names are the official English ones where there are any (azurpromilia.jp, the official EN pages); only Fleece has an official English place name so far, the other places follow the official Thai site's spelling or are translated. source: official = official pages; fan = matched from fan sites, not confirmed by an official page; translation = ours.",
+  "characters": [
+    {"src": "アニス", "aliases": [], "tl": "Anais", "gender": "female", "role": "", "source": "official"},
+    {"src": "キャスベル", "aliases": [], "tl": "Cathbelle", "gender": "female", "role": "", "source": "official"},
+    {"src": "シンフォーリア", "aliases": [], "tl": "Symphoria", "gender": "female", "role": "", "source": "official"},
+    {"src": "テララ", "aliases": [], "tl": "Terara", "gender": "female", "role": "", "source": "official"},
+    {"src": "メーツァ", "aliases": [], "tl": "Metsa", "gender": "female", "role": "", "source": "official"},
+
+    {"src": "アビィ", "aliases": ["アビー"], "tl": "Abby", "gender": "female", "role": "", "source": "fan"},
+    {"src": "シャル", "aliases": [], "tl": "Shalle", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ルルカ", "aliases": [], "tl": "Luruka", "gender": "female", "role": "", "source": "fan"},
+    {"src": "モーレン", "aliases": [], "tl": "Morwyn", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ファランタ", "aliases": [], "tl": "Faridah", "gender": "female", "role": "", "source": "fan (the katakana reads 'Faranta'; fan sites pair it with Faridah)"},
+    {"src": "ルビーナ", "aliases": [], "tl": "Ruby", "gender": "female", "role": "", "source": "fan"},
+    {"src": "塗山小玉", "aliases": ["小玉"], "tl": "Xiaoyu", "gender": "female", "role": "", "source": "fan"},
+    {"src": "寒悠悠", "aliases": ["悠悠"], "tl": "Han Youyou", "gender": "female", "role": "", "source": "fan"},
+    {"src": "リリィ", "aliases": [], "tl": "Lily", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ミィティ", "aliases": ["ミイティ", "ミィティー"], "tl": "Mitty", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ポンポン", "aliases": [], "tl": "Pengpeng", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ペイペイ", "aliases": [], "tl": "Peipei", "gender": "female", "role": "", "source": "fan"},
+    {"src": "カタル", "aliases": [], "tl": "Katalua", "gender": "female", "role": "", "source": "fan"},
+    {"src": "メイプル", "aliases": [], "tl": "Maple", "gender": "female", "role": "", "source": "fan"},
+    {"src": "ノノ", "aliases": [], "tl": "Nono", "gender": "female", "role": "", "source": "fan"},
+    {"src": "蘭香子", "aliases": [], "tl": "Lan Xiangzi", "gender": "female", "role": "", "source": "fan"},
+    {"src": "源千代", "aliases": [], "tl": "Minamoto Chiyo", "gender": "female", "role": "", "source": "fan"},
+    {"src": "洛卿", "aliases": [], "tl": "Luoqing", "gender": "", "role": "", "source": "fan"},
+
+    {"src": "ルミィ", "aliases": [], "tl": "Lumi", "gender": "female", "role": "fairy companion", "source": "guess: no English name found on any site"}
+  ],
+  "terms": [
+    {"src": "星臨者", "reading": "", "tl": "Starborn", "note": "the player character", "source": "fan"},
+    {"src": "キボ", "reading": "", "tl": "Kibo", "note": "the creatures", "source": "official"},
+    {"src": "キャバード", "reading": "", "tl": "Cabbird", "note": "Kibo", "source": "official"},
+    {"src": "ブルーダ", "reading": "", "tl": "Bluda", "note": "Kibo", "source": "official"},
+    {"src": "メテオール", "reading": "", "tl": "Staray", "note": "Kibo", "source": "official names, paired by their order on the JP and EN pages"},
+    {"src": "モフリーネ", "reading": "", "tl": "Downybrinny", "note": "Kibo", "source": "official names, paired by their order on the JP and EN pages"},
+    {"src": "ナイトフォール", "reading": "", "tl": "Vespervamp", "note": "Kibo", "source": "official names, paired by their order on the JP and EN pages"},
+    {"src": "芽吹の谷", "reading": "", "tl": "Sprout Valley", "note": "place", "source": "translation: no official English name yet (Thai site: หุบเขาหน่ออ่อน)"},
+    {"src": "シャルル村", "reading": "", "tl": "Charlulu Village", "note": "place", "source": "spelling of the official Thai site; no official English name yet"},
+    {"src": "鏡花州", "reading": "", "tl": "Jinghua", "note": "place", "source": "spelling of the official Thai site; no official English name yet"},
+    {"src": "フリス", "reading": "", "tl": "Fleece", "note": "place", "source": "official"},
+    {"src": "レーブ", "reading": "", "tl": "Lebe", "note": "place", "source": "official"},
+    {"src": "マウント", "reading": "", "tl": "Mount", "note": "a Kibo the player rides (menus)", "source": "translation"},
+    {"src": "葉野菜", "reading": "", "tl": "leafy vegetable", "note": "", "source": "translation"},
+    {"src": "天性", "reading": "", "tl": "Nature", "note": "a Kibo's nature (a short tag)", "source": "translation"}
+  ]
+}

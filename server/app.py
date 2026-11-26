@@ -174,6 +174,17 @@ class TranslateLinesReq(BaseModel):
     context: list[GameContext] = []
 
 
+NAME_RE = re.compile(r"^[ァ-ヺー・＝=]{2,10}$")  # a name in katakana (ジャベリン, カーク)
+LATIN_NAME_RE = re.compile(r"^[A-Z][A-Za-z'’-]*( [A-Z][A-Za-z'’-]*){0,2}$")  # Javelin, Han Youyou
+
+
+def with_learned(glossary: dict, learned: list[tuple[str, str]]) -> dict:
+    """The glossary with the speaker names learned so far; the glossary's own entry wins (a correction)."""
+    have = {c.get("src") for c in glossary.get("characters", [])} | {a for c in glossary.get("characters", []) for a in c.get("aliases", [])}
+    extra = [{"src": s, "tl": t, "source": "learned"} for s, t in learned if s not in have]
+    return {**glossary, "characters": list(glossary.get("characters", [])) + extra} if extra else glossary
+
+
 def line_key(src: str, kind: str, text: str) -> str:
     # menu text is cached under "ui3": translations made while the labels before one were its context (which
     # copied their translations into it), or with the note for spoken dialogue (which added to descriptions),
@@ -256,7 +267,10 @@ async def translate_lines(req: TranslateLinesReq):
         raise HTTPException(400, f"engine must be one of {GAME_ENGINES}")
     src = normalize_lang(req.src_lang)
     t0 = time.perf_counter()
-    gver, glossary = store.get_glossary(glossary_key(req.series, req.target)) if req.series else (0, {})
+    gkey = glossary_key(req.series, req.target) if req.series else ""
+    gver, glossary = store.get_glossary(gkey) if req.series else (0, {})
+    if req.series:
+        glossary = with_learned(glossary, store.get_learned(gkey))
     keys = {l.id: line_key(src, l.kind, l.src.strip()) for l in req.lines}
     cached = store.get_lines(sorted(set(keys.values())), req.target, gver, req.engine)
     masked = {l.id: mask_numbers(l.src.strip()) for l in req.lines if l.kind == "ui"}
@@ -267,6 +281,23 @@ async def translate_lines(req: TranslateLinesReq):
     out: dict[str, str] = {}
     from_cache, todo, engines_used = [], [], []
     names = glossary_terms(glossary)
+    if req.series and req.target != "en":
+        # a speaker the glossary does not have: written in Latin letters like the known names (the official Thai
+        # site keeps them so), not made Thai by the engine - which did it differently line to line (シフォン came
+        # out ซิฟอน and ชีฟอง) and translated some (ジャベリン became หอกยาว, "spear"). Asked once, then known
+        new = [l for l in req.lines if l.kind == "name" and NAME_RE.match(l.src.strip()) and not match_name(l.src.strip(), names)]
+        if new:
+            try:
+                en, _, _ = await run_in_thread(translate_blocks, [{"id": l.id, "src": l.src.strip(), "kind": "name"} for l in new],
+                                               {}, [], req.engine, req.allow_cloud, False, src, "en", True)
+            except EngineError:
+                en = {}
+            for l in new:
+                tl = (en.get(l.id) or "").strip().strip("\"'.。「」")
+                if LATIN_NAME_RE.match(tl):
+                    store.put_learned(gkey, l.src.strip(), tl)
+                    names.append((l.src.strip(), tl))
+                    glossary.setdefault("characters", []).append({"src": l.src.strip(), "tl": tl, "source": "learned"})
     for l in req.lines:
         text = l.src.strip()
         if not text or src.split("-")[0] == req.target or already_in(text, req.target, src):

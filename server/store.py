@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS line_tl (
   tl TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (line_key, target, glossary_ver, want));
 CREATE TABLE IF NOT EXISTS glossaries (
   series_key TEXT PRIMARY KEY, version INTEGER NOT NULL, json TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS learned_names (
+  series_key TEXT NOT NULL, src TEXT NOT NULL, tl TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (series_key, src));
 """
 
 
@@ -63,6 +65,14 @@ class Store:
             (series_key, ver + 1, json.dumps(glossary, ensure_ascii=False), time.time()),
         )
         return ver + 1
+
+    # names of speakers the glossary does not have, as the engine wrote them in Latin letters the first time: kept
+    # apart from the glossary (whose version keys the cache), so learning one does not throw the cache away
+    def get_learned(self, series_key: str) -> list[tuple[str, str]]:
+        return [(s, t) for s, t in self._q("SELECT src, tl FROM learned_names WHERE series_key=? ORDER BY created", (series_key,))]
+
+    def put_learned(self, series_key: str, src: str, tl: str):
+        self._q("INSERT OR REPLACE INTO learned_names VALUES (?,?,?,?)", (series_key, src, tl, time.time()))
 
     def clear(self):
         self._q("DELETE FROM line_tl")

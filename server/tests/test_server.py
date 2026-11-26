@@ -234,14 +234,14 @@ def test_translate_lines_cache_glossary_and_skips(monkeypatch, tmp_path):
     monkeypatch.setitem(engines._engines, "local", fake)
     client.put("/glossary/azur-promilia?target=th", json=G, headers=h)
     req = {"series": "azur-promilia", "engine": "local",
-           "lines": [{"id": "n", "src": "ジャベリン", "kind": "name"}, {"id": "d", "src": "おはよう、指揮官", "kind": "dialog"},
+           "lines": [{"id": "n", "src": "村長", "kind": "name"}, {"id": "d", "src": "おはよう、指揮官", "kind": "dialog"},
                      {"id": "x", "src": "OK", "kind": "ui"}, {"id": "e", "src": "  ", "kind": "ui"}],
            "context": [{"src": "前", "tl": "ก่อน"}]}
     d = client.post("/translate/lines", json=req, headers=h).json()
     assert d["lines"] == {"n": "ลาฟีย์", "d": "อรุณสวัสดิ์ ผู้บัญชาการ", "x": "", "e": ""}
     assert d["engine"] == "local" and d["cached"] == []
     system, user = seen[0]
-    assert "นักแปลเกม" in system and "ลาฟีย์" in system and "n\t[name]\tジャベリン" in user and "บทพูดก่อนหน้า" in user
+    assert "นักแปลเกม" in system and "ลาฟีย์" in system and "n\t[name]\t村長" in user and "บทพูดก่อนหน้า" in user
     # same lines again: all from cache, no engine call
     d2 = client.post("/translate/lines", json=req, headers=h).json()
     assert d2["lines"] == d["lines"] and sorted(d2["cached"]) == ["d", "n"] and fake.calls == 1
@@ -467,6 +467,35 @@ def test_translate_lines_answers_a_bare_glossary_name_without_an_engine(monkeypa
     assert d["lines"] == {"n": "Laffey", "a": "Laffey"} and d["engine"] == "glossary" and fake.calls == 0
     d = client.post("/translate/lines", json={**req, "lines": [{"id": "d", "src": "ラフィー、眠い", "kind": "dialog"}]}, headers=h).json()
     assert d["lines"] == {"d": "Laffey ง่วงแล้ว"} and fake.calls == 1  # a sentence still goes to the engine
+
+
+def test_an_unknown_speaker_is_learned_in_latin_letters_once(monkeypatch, tmp_path):
+    """A speaker the glossary does not have came out in Thai, differently line to line (シフォン: ซิฟอน / ชีฟอง), or
+    translated (ジャベリン: หอกยาว). Now the engine is asked once for it in English, the name is kept, and both name
+    boxes and dialogue use it from then on; a reading that is no name (村民たち, a sentence) is translated as before."""
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    calls = []
+
+    def fake_blocks(blocks, glossary, ctx, engine, allow_cloud, novel, src, target, game):
+        calls.append((target, [x["src"] for x in blocks], [c["tl"] for c in glossary.get("characters", [])]))
+        if target == "en":
+            return {x["id"]: {"シフォン": "Chiffon.", "カーク": "the spear"}.get(x["src"], "") for x in blocks}, "local", {}
+        return {x["id"]: "ชาวบ้าน" if x["src"] == "村民たち" else "พูด" for x in blocks}, "local", {}
+
+    monkeypatch.setattr(app_mod, "translate_blocks", fake_blocks)
+    client.put("/glossary/game?target=th", json={"characters": [{"src": "テララ", "tl": "Terara"}], "terms": []}, headers=h)
+    req = {"series": "game", "engine": "local", "lines": [{"id": "a", "src": "シフォン", "kind": "name"},
+                                                           {"id": "b", "src": "カーク", "kind": "name"},
+                                                           {"id": "c", "src": "村民たち", "kind": "name"},
+                                                           {"id": "d", "src": "テララ", "kind": "name"}]}
+    d = client.post("/translate/lines", json=req, headers=h).json()["lines"]
+    assert d == {"a": "Chiffon", "b": "พูด", "c": "ชาวบ้าน", "d": "Terara"}  # (no name in "the spear": Thai as before)
+    assert calls[0][:2] == ("en", ["シフォン", "カーク"])
+    calls.clear()
+    d = client.post("/translate/lines", json={**req, "lines": [{"id": "a", "src": "シフオン", "kind": "name"}]}, headers=h).json()
+    assert d["lines"] == {"a": "Chiffon"} and d["engine"] == "glossary" and calls == []  # (misread small kana: still it)
+    client.post("/translate/lines", json={**req, "lines": [{"id": "x", "src": "シフォン、こっち！", "kind": "dialog"}]}, headers=h)
+    assert calls and calls[-1][0] == "th" and "Chiffon" in calls[-1][2]  # dialogue gets the name too
 
 
 def test_terms_in_text_prefers_the_longer_term():

@@ -1093,6 +1093,16 @@ class Controller(QObject):
         self.notify(t("Glossary updated"), t("{n} names / terms found — they are translated the same way every time", n=n))
 
 
+def load_fonts():
+    """The fonts that come with game-lens (fonts/<family>/*.ttf, free to pass on: SIL Open Font License), usable
+    for the translations without installing them in Windows."""
+    from PySide6.QtGui import QFontDatabase
+
+    for f in sorted((ROOT / "fonts").rglob("*.[ot]tf")):
+        if QFontDatabase.addApplicationFont(str(f)) < 0:
+            log.warning("font %s could not be loaded", f.name)
+
+
 def main():
     (ROOT / "logs").mkdir(exist_ok=True)
     logging.basicConfig(filename=ROOT / "logs" / "gamelens.log", level=logging.INFO, encoding="utf-8",
@@ -1103,6 +1113,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("game-lens")
     app.setWindowIcon(app_icon())
+    load_fonts()
     # one instance: starting game-lens again just brings the running one's window up
     # `python -m gamelens --quit` closes the running one (and the server / model it started)
     command = b"quit" if "--quit" in sys.argv else b"show"

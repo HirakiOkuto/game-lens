@@ -17,6 +17,7 @@ from PySide6.QtGui import QImage, QPainter  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from gamelens.api import LensClient  # noqa: E402
+from gamelens.app import load_fonts  # noqa: E402
 from gamelens.overlay import Overlay  # noqa: E402
 from gamelens.profile import REMOTE, ROOT, Profile, Settings  # noqa: E402
 from gamelens.screen import lines_to_translate, paragraphs, requests, screen_items  # noqa: E402
@@ -27,11 +28,16 @@ def main():
     ap.add_argument("image")
     ap.add_argument("out")
     ap.add_argument("--engine", default="")
+    ap.add_argument("--font", default="", help="draw in this font instead of the profile's")
+    ap.add_argument("--target", default="", help="translate into this language instead of the profile's")
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")
     app = QApplication([])  # noqa: F841
+    load_fonts()
     st = Settings.load()
     prof = Profile.load(st.resolve(st.profile))
+    prof.font_family = a.font or prof.font_family
+    prof.target = a.target or prof.target
     if a.engine:
         engine = a.engine
     else:  # the profile's "local translator" is whichever model is picked for this computer

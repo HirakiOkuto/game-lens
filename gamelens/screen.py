@@ -38,6 +38,42 @@ def lines_to_translate(lines: list[dict], skip: list, src_lang: str = "ja", min_
             and not in_any(l["bbox"], skip)]
 
 
+def text_marks(frame: np.ndarray, boxes, texts=None) -> list:
+    """What the text in each box looks like (its edges), and about how many letters it has (box width / height
+    unless the texts are given): kept to tell later whether that text is still there."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    out = []
+    for i, (x, y, w, h) in enumerate(boxes):
+        x0, y0 = max(0, int(x)), max(0, int(y))
+        crop = gray[y0 : y0 + int(h), x0 : x0 + int(w)]
+        if crop.size:
+            n = len(texts[i]) if texts else max(1, int(w) // max(1, int(h)))
+            out.append(((x0, y0, crop.shape[1], crop.shape[0]), cv2.Canny(crop, 60, 160) > 0, n))
+    return out
+
+
+def text_still_there(frame: np.ndarray, marks: list) -> bool:
+    """Is the text that was translated still on screen as it was? A box whose edges are mostly gone has other text
+    now (or none). A short label or two may flicker over something moving; a sentence that changed (the next tip
+    in a bubble), or a good part of all the text, means the translation no longer fits."""
+    if not marks:
+        return True
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    gone = 0
+    total = sum(n for _, _, n in marks)
+    for (x, y, w, h), edges, n in marks:
+        crop = gray[y : y + h, x : x + w]
+        if crop.shape != edges.shape:
+            continue
+        now = cv2.dilate((cv2.Canny(crop, 60, 160) > 0).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        e = int(edges.sum())
+        if e and (edges & now).sum() < 0.6 * e:
+            if n >= 8:
+                return False
+            gone += n
+    return gone < 0.2 * total
+
+
 def common_heights(heights: list[int]) -> list[float]:
     """Labels of one menu are set in one size, but their measured glyph heights differ by a few pixels with the
     characters in them. Each height becomes the median of the heights close to it, so they come out equal."""
@@ -132,6 +168,7 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
             rect, align = place_block(looks, size)
         items.append(Item(rect=rect, text=tl, fg=a.fg, outline=outline_for(a.fg, a.bg, all(k.calm for k in looks)),
                           max_px=size, align=align, vcenter=len(looks) == 1))
+        items[-1]._boxes = [k.box for k in looks]  # where the original text is (to notice when it changes)
     patch = erase_lines(frame, [a for _, looks in done for a in looks])
     if patch is not None:
         items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)

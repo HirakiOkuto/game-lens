@@ -806,3 +806,24 @@ def test_each_game_gets_its_own_profile(tmp_path):
     assert find_profile("BlueArchiveKR.exe", tmp_path) == tmp_path / "bluearchivekr.json"
     again = new_profile("BlueArchiveKR.exe", "", base, tmp_path)
     assert again.path.endswith("bluearchivekr-2.json") and again.src_lang == base.src_lang
+
+
+def test_a_translated_screen_stays_while_something_else_moves():
+    from gamelens.screen import text_marks, text_still_there
+
+    rng = np.random.default_rng(3)
+    pic = cv2.resize(rng.integers(40, 90, (30, 50, 3), np.uint8), (1000, 600), interpolation=cv2.INTER_CUBIC)
+    boxes = []
+    for i, text in enumerate(["HP 1217", "ATK 24", "Look, you can see its power now!"]):
+        y = 100 + 60 * i
+        cv2.putText(pic, text, (500, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2, cv2.LINE_AA)
+        boxes.append([496, y, 30 * len(text) // 2 + 40, 30])
+    marks = text_marks(pic, boxes)
+    moving = pic.copy()
+    moving[50:500, 50:400] = np.roll(pic[50:500, 50:400], 12, axis=0)  # a character bobbing beside the text
+    assert text_still_there(pic, marks) and text_still_there(moving, marks)
+    assert text_still_there(cv2.convertScaleAbs(pic, alpha=1.1, beta=5), marks)  # a light pulse
+    tip = pic.copy()
+    tip[220:250, 490:1000] = 60  # the long line (a tip) was replaced
+    assert not text_still_there(tip, marks)
+    assert not text_still_there(cv2.resize(rng.integers(40, 90, (30, 50, 3), np.uint8), (1000, 600)), marks)  # another page

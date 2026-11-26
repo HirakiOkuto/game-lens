@@ -260,6 +260,11 @@ class Panel(QWidget):
         lay.addWidget(disp)
         lay.addWidget(keys)
         lay.addLayout(foot)
+        # a narrow window: drop-downs shrink to it (their lists still open as wide as their longest entry)
+        for combo in body.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(10)
+            combo.view().setMinimumWidth(combo.view().sizeHintForColumn(0) + 24)
         scroll = QScrollArea()
         scroll.setWidget(body)
         scroll.setWidgetResizable(True)
@@ -282,7 +287,7 @@ class Panel(QWidget):
         self.auto.blockSignals(False)
         self.size.blockSignals(True)
         if auto_label:
-            self.size.setItemText(0, f"อัตโนมัติตามการ์ดจอ (เครื่องนี้: {auto_label})")
+            self.size.setItemText(0, f"อัตโนมัติ — เครื่องนี้: {auto_label}")
         self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
         self.size.blockSignals(False)
         for w in (self.engine, self.font, self.target, self.toasts, self.src):

@@ -29,7 +29,7 @@ from .panel import Panel
 from .picker import GamePicker
 from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
+from .screen import (TextSize, begins, text_marks, text_still_there, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
@@ -184,6 +184,8 @@ class Controller(QObject):
         self.context: deque = deque(maxlen=self.settings.context_lines)
         self.screen_gen = 0
         self.screen_ref: np.ndarray | None = None
+        self.screen_frame: np.ndarray | None = None
+        self.screen_marks: list = []  # what the translated text looked like (see text_still_there)
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -789,6 +791,7 @@ class Controller(QObject):
         self.screen_busy = True
         self.screen_gen += 1
         self.screen_ref = ref
+        self.screen_frame, self.screen_marks = frame, []
         self.auto_done = ref  # this picture is handled: auto mode will not start on it again
         self.overlay.set_pending("screen", (frame.shape[1] // 2 + 21, 60))
         if not auto:
@@ -865,17 +868,22 @@ class Controller(QObject):
         if not items:
             self.toast("ไม่พบข้อความบนจอ", 2)
         self.overlay.set_items("screen", items)
+        self.screen_marks = text_marks(self.screen_frame, [b for it in items for b in getattr(it, "_boxes", [])])
 
     def check_screen_dismiss(self, frame: np.ndarray):
         if win32.key_down(win32.VK["ESC"]):
             self.dismiss_screen()
             return
-        now_map = ink_map(frame, "any")
-        if changed_pixels(self.screen_ref, now_map) > 0.03 * now_map.size:
-            self.dismiss_screen()  # the menu changed: the labels no longer match
+        if self.screen_marks:
+            if not text_still_there(frame, self.screen_marks):
+                self.dismiss_screen()  # the text that was translated is gone: another page, a closed menu
+            return
+        now_map = ink_map(frame, "any")  # still being read: only a quite different screen counts
+        if changed_pixels(self.screen_ref, now_map) > 0.25 * now_map.size:
+            self.dismiss_screen()
 
     def dismiss_screen(self):
-        self.screen_ref = None
+        self.screen_ref, self.screen_marks = None, []
         self.screen_gen += 1
         self.overlay.set_pending("screen", None)
         self.overlay.clear("screen")

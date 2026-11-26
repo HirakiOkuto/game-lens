@@ -21,7 +21,7 @@ ENGINE_INFO = [
     {"key": "local", "name": "Gemma 26B — ในเครื่อง",
      "desc": "แปลสวยที่สุดในเครื่อง เข้าใจบริบท • ใช้การ์ดจอมาก อาจทำให้เกมกระตุก", "keys": []},
     {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร",
-     "desc": "ไม่ใช้การ์ดจอ • ช่องทางไม่เป็นทางการ อาจถูกจำกัดชั่วคราวถ้าใช้เยอะ", "keys": []},
+     "desc": "ไม่ใช้การ์ดจอ • ช่องทางเดียวกับ LunaTranslator (ไม่เป็นทางการ Google เปลี่ยนหรือจำกัดได้ทุกเมื่อ)", "keys": []},
     {"key": "deepl", "name": "DeepL",
      "desc": "ฟรี 500,000 ตัวอักษร/เดือน (สมัคร DeepL API Free) • ไม่ใช้การ์ดจอ",
      "keys": [("DEEPL_API_KEY", "API key")], "signup": "https://www.deepl.com/pro-api"},

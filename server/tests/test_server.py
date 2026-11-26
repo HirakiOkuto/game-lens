@@ -132,13 +132,29 @@ def test_google_official_locks_names_in_html_mode(monkeypatch):
 
 
 def test_google_free_engine(monkeypatch):
-    seen = []
+    sent, seen = [], []
 
-    def handler(req):
+    def chrome(req):  # translate-pa: every line in one request, names in translate="no" spans
+        if req.url.path.endswith("translateHtml"):
+            body = json.loads(req.content)
+            sent.append((body, req.headers.get("x-goog-api-key")))
+            return httpx.Response(200, json=[[t.replace("ラフィー", "") + " สวัสดี &amp; ok" for t in body[0][0]]])
+        return httpx.Response(500)
+
+    e = web_engines.GoogleFreeEngine(transport=httpx.MockTransport(chrome))
+    out = e.translate_page(["ラフィー", "あ"], "ja", "th", [], G)
+    assert out == ["ลาฟีย์ สวัสดี & ok", "あ สวัสดี & ok"] and len(sent) == 1  # one request for the page
+    body, key = sent[0]
+    assert body[0][1:] == ["ja", "th"] and body[1] == "wt_lib" and key == web_engines.GoogleFreeEngine.KEY
+    assert 'translate="no"' in body[0][0][0] and "ลาฟีย์" in body[0][0][0]
+
+    def old(req):  # refused there: the older gtx endpoint, line by line
+        if req.url.path.endswith("translateHtml"):
+            return httpx.Response(403)
         seen.append(dict(req.url.params))
         return httpx.Response(200, json=[[["สวัสดี ", req.url.params["q"], None], ["ครับ", "x", None]], None, "ja"])
 
-    e = web_engines.GoogleFreeEngine(transport=httpx.MockTransport(handler))
+    e = web_engines.GoogleFreeEngine(transport=httpx.MockTransport(old))
     assert e.translate_page(["ラフィー"], "ja", "th", [], G) == ["สวัสดี ครับ"]
     assert seen[0]["client"] == "gtx" and seen[0]["sl"] == "ja" and seen[0]["tl"] == "th" and seen[0]["q"] == "ลาฟีย์"
     e429 = web_engines.GoogleFreeEngine(transport=httpx.MockTransport(lambda r: httpx.Response(429)))
@@ -243,7 +259,7 @@ def test_translate_lines_remote_needs_permission(monkeypatch, tmp_path):
     monkeypatch.setitem(engines._engines, "local", FakeEngine([{"lines": [{"id": "a", "tl": "ก"}]}]))
     calls = []
     monkeypatch.setitem(engines._engines, "google_free", web_engines.GoogleFreeEngine(
-        transport=httpx.MockTransport(lambda r: (calls.append(1), httpx.Response(200, json=[[["ข", "x"]]]))[1])))
+        transport=httpx.MockTransport(lambda r: (calls.append(1), httpx.Response(200, json=[["ข"]]))[1])))
     req = {"engine": "google_free", "allow_cloud": False, "lines": [{"id": "a", "src": "あ"}]}
     d = client.post("/translate/lines", json=req, headers=h).json()
     assert d["engine"] == "local" and calls == []
@@ -290,7 +306,7 @@ def test_engine_test_endpoint_reports_fallback_as_failure(monkeypatch, tmp_path)
     d = client.post("/config/test/google_free", headers=h).json()
     assert d["ok"] is False and "429" in d["error"]
     monkeypatch.setitem(engines._engines, "google_free", web_engines.GoogleFreeEngine(
-        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[[["สวัสดี", "x"]]]))))
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=[["สวัสดี"]]))))
     d = client.post("/config/test/google_free", headers=h).json()
     assert d["ok"] is True and d["text"] == "สวัสดี"
 

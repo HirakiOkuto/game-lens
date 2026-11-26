@@ -14,6 +14,7 @@ in a no-translate tag where the engine honours one, and the tags are stripped fr
 from __future__ import annotations
 
 import html
+import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -163,14 +164,20 @@ class _DeepLHttp(EngineError):
 
 # --- Google, keyless (gtx) -------------------------------------------------------------------------------------
 class GoogleFreeEngine:
-    """translate.googleapis.com's `client=gtx` endpoint (what browser extensions and LunaTranslator use)."""
+    """Google Translate without a key of one's own, the way LunaTranslator does it: the endpoint Chrome's
+    "translate this page" uses (translate-pa.googleapis.com, with the API key built into Chrome), every line of a
+    page in one request, names locked with translate="no" spans. If that is refused, the older `client=gtx`
+    endpoint, one line at a time. Neither is an official API: Google may limit or change them at any time."""
 
     name = "google_free"
-    URL = "https://translate.googleapis.com/translate_a/single"
+    URL = "https://translate-pa.googleapis.com/v1/translateHtml"
+    KEY = "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520"  # Chrome's own (public in Chromium builds and LunaTranslator)
+    GTX = "https://translate.googleapis.com/translate_a/single"
     LANGS = {"zh": "zh-CN", "zh-cn": "zh-CN", "zh-hk": "zh-TW", "zh-tw": "zh-TW"}
+    UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 
     def __init__(self, transport: httpx.BaseTransport | None = None):
-        self.http = httpx.Client(timeout=15, transport=transport, headers={"User-Agent": "Mozilla/5.0"})
+        self.http = httpx.Client(timeout=15, transport=transport, headers={"User-Agent": self.UA})
 
     def available(self) -> bool:
         return True
@@ -179,10 +186,27 @@ class GoogleFreeEngine:
         c = (code or "").lower()
         return self.LANGS.get(c, c.split("-")[0])
 
-    def _one(self, text: str, src: str, target: str) -> str:
+    def _html(self, texts: list[str], src: str, target: str) -> list[str]:
+        body = json.dumps([[texts, self._lang(src), self._lang(target)], "wt_lib"])
+        try:
+            r = self.http.post(self.URL, content=body.encode("utf-8"),
+                               headers={"Content-Type": "application/json+protobuf", "X-Goog-Api-Key": self.KEY})
+        except httpx.HTTPError as e:
+            raise EngineError(f"Google (free) unreachable: {e}") from e
+        if r.status_code != 200:
+            raise EngineError(f"Google (free) HTTP {r.status_code}{' (rate limited)' if r.status_code == 429 else ''}")
+        try:
+            out = r.json()[0]
+        except (ValueError, TypeError, IndexError) as e:
+            raise EngineError("Google (free) returned an unexpected answer") from e
+        if not isinstance(out, list) or len(out) != len(texts):
+            raise EngineError("Google (free) returned an unexpected answer")
+        return out
+
+    def _gtx(self, text: str, src: str, target: str) -> str:
         params = {"client": "gtx", "sl": self._lang(src), "tl": self._lang(target), "dt": "t", "q": text}
         try:
-            r = self.http.get(self.URL, params=params)
+            r = self.http.get(self.GTX, params=params)
         except httpx.HTTPError as e:
             raise EngineError(f"Google (free) unreachable: {e}") from e
         if r.status_code != 200:
@@ -195,9 +219,16 @@ class GoogleFreeEngine:
     def translate_page(self, texts: list[str], src: str, target: str, context: list[dict], glossary: dict,
                        style: str = "manga") -> list[str]:
         terms = terms_in(texts, glossary)
-        locked = [lock(t, terms, "inline") for t in texts]
-        with ThreadPoolExecutor(min(4, max(1, len(texts)))) as pool:
-            return [t.strip() for t in pool.map(lambda t: self._one(t, src, target), locked)]
+        try:
+            out = self._html([lock(t, terms, "html") for t in texts], src, target)
+            return [unlock(t, "html") for t in out]
+        except EngineError as first:
+            locked = [lock(t, terms, "inline") for t in texts]
+            try:
+                with ThreadPoolExecutor(min(4, max(1, len(texts)))) as pool:
+                    return [t.strip() for t in pool.map(lambda t: self._gtx(t, src, target), locked)]
+            except EngineError as e:
+                raise EngineError(f"{first}; then {e}") from e
 
 
 # --- Microsoft Azure Translator (key; the F0 tier is free up to 2M characters a month) ------------------------

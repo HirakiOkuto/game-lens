@@ -191,6 +191,7 @@ class Controller(QObject):
         self.shown_seq: dict[str, int] = {}
         self.region_active = 0.0  # when text in a region last changed
         self.auto_empties = 0  # times in a row that auto mode found nothing to translate
+        self.auto_read_at = 0.0  # when auto mode last finished reading the screen
         self.auto_thumbs: deque = deque()  # (time, thumbnail) of the last half second: a sudden change is another screen
         self.genders: dict[str, str] | None = None  # speaker name -> gender, from the glossary file
         self.held: dict[str, tuple] = {}  # translations that wait for a line to be read once more
@@ -1039,7 +1040,9 @@ class Controller(QObject):
                 return  # handled already
         wts = {r.kind: self.watchers[r.id] for r in self.profile.regions}
         settled = {k for k, w in wts.items() if w.settled and not (k == "name" and len(plain_text(w.last_text)) > 10)}
-        still = now - max(self.auto_still_since, self.region_active)
+        # (the wait counts from the last reading too: from the moment the screen went still only, a player standing
+        # in the world for more than 8 s had it read again as soon as the reading before was done, endlessly)
+        still = now - max(self.auto_still_since, self.region_active, self.auto_read_at)
         if still < auto_pause(settled, self.auto_empties) or any(w.reading for w in wts.values()):
             return
         self.start_screen(frame, ink_map(frame, "any"), auto=True)
@@ -1141,7 +1144,9 @@ class Controller(QObject):
         # read again for nothing (the screen only shimmered): do not let that happen every second
         self.screen_quiet = time.monotonic() + 8 if texts and texts == self.screen_texts else 0.0
         self.screen_texts = texts or self.screen_texts
-        self.auto_empties = 0 if items and not same else self.auto_empties + 1
+        self.auto_empties = 0 if items and not same else min(self.auto_empties + 1, 8)
+        if self.screen_auto:
+            self.auto_read_at = time.monotonic()
         if items is None:  # auto mode found nothing to translate: stay quiet
             self.dismiss_screen()  # (and take away what an earlier reading of this screen put there)
             return

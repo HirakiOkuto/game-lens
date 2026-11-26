@@ -1247,3 +1247,33 @@ def test_auto_mode_backs_off_on_a_slowly_changing_scene():
     now += 0.1
     Controller.auto_screen_tick(c, (base * 0.3).astype(np.uint8), now)  # a menu darkens the screen
     assert c.auto_empties == 0
+
+
+def test_auto_mode_reads_a_still_empty_world_only_now_and_then():
+    """The player stands in the world for a minute, nothing to read: the wait after empty readings counted from the
+    moment the screen went still, so after 8 s every tick read the screen again (77 readings a minute, until the
+    count of empty readings overflowed 2 ** n)."""
+    from collections import deque
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+    from gamelens.watcher import ScreenCalm, auto_pause
+
+    assert auto_pause(set(), 5000) == 8.0  # (no overflow, however many)
+    rng = np.random.default_rng(4)
+    frame = rng.integers(0, 255, (270, 480, 3), dtype=np.uint8)
+    reads = []
+
+    def start_screen(f, ref, auto=True, **k):  # a reading that finds nothing (see on_screen_done)
+        reads.append(c.now)
+        c.auto_empties = min(c.auto_empties + 1, 8)
+        c.auto_read_at = c.now
+
+    c = SimpleNamespace(auto_prev=None, auto_calm=ScreenCalm(), auto_thumbs=deque(), auto_empties=0, auto_still_since=0.0,
+                        auto_read_at=0.0, region_active=0.0, screen_busy=False, screen_ref=None, health=True, auto_done=None,
+                        services=SimpleNamespace(state="ready"), profile=SimpleNamespace(regions=[]), watchers={},
+                        start_screen=start_screen, now=0.0)
+    for _ in range(600):  # a minute at 10 looks a second
+        c.now += 0.1
+        Controller.auto_screen_tick(c, frame, c.now)
+    assert 4 <= len(reads) <= 12, len(reads)

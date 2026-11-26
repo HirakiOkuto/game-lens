@@ -42,7 +42,7 @@ def auto_pause(settled_kinds: set[str], empties: int) -> float:
         need = 6.0  # someone is speaking
     else:
         need = 2.0 if settled_kinds else 0.7  # (0.4 s began reading while a tab was still sliding in)
-    return max(need, min(8.0, 2.0 ** empties) if empties else 0.0)
+    return max(need, min(8.0, 2.0 ** min(empties, 3)) if empties else 0.0)
 
 
 def tile_changes(a: np.ndarray, b: np.ndarray, rows: int = 9, cols: int = 16) -> tuple[np.ndarray, np.ndarray]:

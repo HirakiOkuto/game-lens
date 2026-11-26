@@ -136,7 +136,19 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     box = frame[y0:y1, x0:x1].astype(np.int16)
     cands.append(np.median(np.concatenate([box[0], box[-1], box[:, 0], box[:, -1]]), 0))
     middle = frame[b0:b1, x0:x1].reshape(-1, 3).astype(np.int16)
-    bg = max(cands, key=lambda c: int((np.abs(middle - c).max(1) < 30).sum()))
+    # The box's own first and last columns: in front of and behind the letters. Where they are what lies beside the
+    # box too, that is the background, also when bold letters fill most of the line (a small tag's label). Where
+    # they differ, the box hugs a small tag or button whose fill they are, and the fill joins the candidates.
+    end_px = np.concatenate([box[b0 - y0 : b1 - y0, :2], box[b0 - y0 : b1 - y0, -2:]], 1).reshape(-1, 3)
+    ends = np.median(end_px, 0)
+    solid = (np.abs(end_px - ends).max(1) < 20).mean() >= 0.85  # one colour there, not cut-through letters
+    sides = cands[:-1]
+    if solid and sides and w >= 3 * h and all(np.abs(c - ends).max() < 30 for c in sides):
+        bg = ends
+    else:
+        if solid:
+            cands.append(ends)
+        bg = max(cands, key=lambda c: int((np.abs(middle - c).max(1) < 30).sum()))
 
     g = max(2, round(0.15 * h))
     ex0, ey0, ex1, ey1 = max(0, x0 - g), max(0, y0 - g), min(W, x1 + g), min(H, y1 + g)

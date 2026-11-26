@@ -139,7 +139,8 @@ def requests(groups: list[list[dict]], src_lang: str = "ja") -> list[dict]:
 THAI_MARKS = set(chr(c) for c in [0x0E31, *range(0x0E34, 0x0E3B), *range(0x0E47, 0x0E4F)])  # above / below a letter
 
 
-def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, others=(), look: Line | None = None):
+def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, others=(), look: Line | None = None,
+             bounds: tuple[int, int] | None = None):
     """A label's translation on one line where it fits on one line at its size: a box squeezed between icons would
     otherwise break it letter by letter. Widened around its middle (or from its start), within the picture, but
     never over other text of the screen (`others`: boxes of every line read, `own` among them) - there the font
@@ -149,9 +150,13 @@ def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, o
     need = int(0.55 * size * sum(c not in THAI_MARKS for c in text)) + 6
     if w >= need:
         return rect
-    lo, hi = 0, frame_w
-    if look is not None and look.calm:  # on a panel or a button: stay on its own background
-        lo, hi = look.box[0] - look.free_left, look.box[0] + look.box[2] + look.free_right
+    if look is not None and look.calm:  # on a panel or a button: stay on its own background...
+        calm = (look.box[0] - look.free_left, look.box[0] + look.box[2] + look.free_right)
+        fitted = room_for(rect, align, text, size, frame_w, own, others, None, calm)
+        if fitted[2] >= 0.7 * min(need, max(3 * w, 220)):
+            return fitted
+        # ...unless the font would shrink past reading there (a small tag): then it runs over the tag's edge
+    lo, hi = bounds if bounds else (0, frame_w)
     ox = own[0] + own[2] / 2 if own else x + w / 2
     for b in others:
         if b is own or b[1] >= y + h or b[1] + b[3] <= y:

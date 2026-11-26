@@ -40,6 +40,8 @@
     {"src": "シャルル村", "reading": "", "tl": "หมู่บ้าน Charlulu", "note": "place", "source": "official (Thai site)"},
     {"src": "鏡花州", "reading": "", "tl": "แหลม Jinghua", "note": "place", "source": "official (Thai site)"},
     {"src": "フリス", "reading": "", "tl": "Fleece", "note": "place", "source": "official"},
-    {"src": "レーブ", "reading": "", "tl": "Lebe", "note": "place", "source": "official"}
+    {"src": "レーブ", "reading": "", "tl": "Lebe", "note": "place", "source": "official"},
+    {"src": "マウント", "reading": "", "tl": "พาหนะ", "note": "a Kibo the player rides (menus)", "source": "translation"},
+    {"src": "葉野菜", "reading": "", "tl": "ผักใบ", "note": "leafy vegetable", "source": "translation"}
   ]
 }

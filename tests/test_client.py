@@ -213,6 +213,18 @@ def test_analyze_line_colours_room_and_glyphs():
     assert luminance(head.bg) < 80 < luminance(head.fg) and head.free_right > 300
 
 
+def test_analyze_line_small_tags():
+    """The reader's box hugs a small tag: bold letters fill most of a white tag's middle, and a filled tag's own
+    colour is not what lies beside it. Both must still come out as the tag's colour behind its letters."""
+    from gamelens.render import analyze_line, luminance
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "kibo_tags.png"))  # from Azur Promilia's Kibo page
+    white = analyze_line(img, [23, 35, 87, 18])  # 異生類·翼形族: bold blue letters on a white tag
+    assert luminance(white.fg) < 160 and luminance(white.bg) > 200
+    filled = analyze_line(img, [53, 10, 34, 17])  # 小型: white letters on a blue-grey tag
+    assert luminance(filled.fg) > 200 and luminance(filled.bg) < 170
+
+
 def test_erase_lines_covers_only_the_glyphs():
     from gamelens.render import analyze_line, contrast_outline, erase_lines, outline_for
 

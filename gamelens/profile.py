@@ -136,6 +136,8 @@ class Settings:
     start_hidden: bool = False  # open only the tray icon once setup is complete
     toasts: bool = True  # short status messages on the game screen
     auto_screen: bool = False  # translate the whole screen by itself when it stands still (menus, quests)
+    english_keys: bool = True  # switch the keyboard to English while the game has the focus (games draw the key
+    # of a Thai layout as a box they have no letter for)
 
     def save(self, path: Path = ROOT / "settings.json"):
         path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8")

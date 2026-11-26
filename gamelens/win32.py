@@ -25,6 +25,10 @@ user32.GetAsyncKeyState.restype = ctypes.c_short
 user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
 user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+user32.GetKeyboardLayout.restype = ctypes.c_void_p
+user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+user32.GetKeyboardLayoutList.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 kernel32.OpenProcess.restype = wintypes.HANDLE
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
@@ -141,6 +145,28 @@ def is_window(hwnd: int) -> bool:
 
 def is_minimized(hwnd: int) -> bool:
     return bool(user32.IsIconic(hwnd))
+
+
+WM_INPUTLANGCHANGEREQUEST = 0x0050
+LANG_ENGLISH = 0x09
+
+
+def keyboard_layout(hwnd: int) -> int:
+    """The keyboard layout (HKL) the window's thread types with."""
+    return int(user32.GetKeyboardLayout(user32.GetWindowThreadProcessId(hwnd, None)) or 0)
+
+
+def english_layout() -> int | None:
+    """An English keyboard layout among the ones installed, or None."""
+    n = user32.GetKeyboardLayoutList(0, None)
+    arr = (ctypes.c_void_p * max(1, n))()
+    n = user32.GetKeyboardLayoutList(n, arr)
+    return next((int(h) for h in arr[:n] if h and int(h) & 0x3FF == LANG_ENGLISH), None)
+
+
+def ask_layout(hwnd: int, hkl: int):
+    """Ask the window to type with this layout (what the language bar does when you pick one)."""
+    user32.PostMessageW(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, hkl)
 
 
 def foreground() -> int:

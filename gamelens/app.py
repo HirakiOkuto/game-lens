@@ -193,6 +193,7 @@ class Controller(QObject):
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
         self.screen_texts: frozenset = frozenset()  # what the last screen translation said
+        self.next_keys, self.keys_told = 0.0, False  # see keep_english_keys
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -227,6 +228,7 @@ class Controller(QObject):
         self.panel.target_changed.connect(lambda t: self.set_profile(target=t))
         self.panel.src_lang_changed.connect(lambda s: self.set_profile(src_lang=s))
         self.panel.toasts_changed.connect(self.set_toasts)
+        self.panel.english_keys_changed.connect(self.set_english_keys)
         self.panel.show_history.connect(self.show_history)
         self.panel.make_shortcut.connect(self.make_shortcut)
         self.panel.quit_app.connect(self.quit)
@@ -478,6 +480,25 @@ class Controller(QObject):
                 it._scale = v
         self.overlay.update()
 
+    def set_english_keys(self, on: bool):
+        self.settings.english_keys = on
+        self.settings.save()
+
+    def keep_english_keys(self, now: float):
+        """While the game has the focus, its keyboard is English: with a Thai layout the game shows its key hints
+        as boxes. Checked twice a second; asked for again only when it went back to another language."""
+        if now < self.next_keys:
+            return
+        self.next_keys = now + 0.5
+        if win32.keyboard_layout(self.hwnd) & 0x3FF == win32.LANG_ENGLISH:
+            return
+        hkl = win32.english_layout()
+        if hkl:
+            win32.ask_layout(self.hwnd, hkl)
+            if not self.keys_told:
+                self.keys_told = True
+                self.toast("สลับแป้นพิมพ์เป็นภาษาอังกฤษให้แล้ว (ปิดได้ในหน้าต่าง game-lens)", 3)
+
     def set_toasts(self, on: bool):
         self.settings.toasts = on
         self.settings.save()
@@ -524,7 +545,8 @@ class Controller(QObject):
     # --- game window ------------------------------------------------------------------------------------------
     def load_panel(self):
         self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
-                        self.auto_screen, self.settings.local_model, self.auto_label, self.profile.src_lang)
+                        self.auto_screen, self.settings.local_model, self.auto_label, self.profile.src_lang,
+                        self.settings.english_keys)
 
     def switch_profile(self, path: Path):
         """Another game: its own regions, language and names. Remembered as the game to open next time."""
@@ -650,6 +672,8 @@ class Controller(QObject):
         peek = win32.key_down(self.peek_vk)
         focused = fg == self.hwnd or fg in own or self.always_show
         visible = not minimized and self.editor is None and focused and not peek
+        if fg == self.hwnd and self.settings.english_keys:
+            self.keep_english_keys(time.monotonic())
         if visible:
             self.overlay.follow(cr)
             if not self.overlay.isVisible():

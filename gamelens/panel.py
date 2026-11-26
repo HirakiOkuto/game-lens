@@ -82,6 +82,7 @@ class Panel(QWidget):
     target_changed = Signal(str)
     src_lang_changed = Signal(str)
     toasts_changed = Signal(bool)
+    english_keys_changed = Signal(bool)
     auto_screen_changed = Signal(bool)
     show_history = Signal()
     make_shortcut = Signal()
@@ -209,6 +210,9 @@ class Panel(QWidget):
         g.addWidget(self.target, 2, 1, 1, 2)
         self.toasts = QCheckBox("แสดงข้อความสถานะสั้นๆ บนจอเกม")
         self.toasts.toggled.connect(self.toasts_changed.emit)
+        self.english = QCheckBox("สลับแป้นพิมพ์เป็นภาษาอังกฤษเองเมื่ออยู่ในเกม")
+        self.english.setToolTip("แป้นภาษาไทยทำให้ป้ายปุ่มในเกมขึ้นเป็นสี่เหลี่ยม □")
+        self.english.toggled.connect(self.english_keys_changed.emit)
         self.auto = QCheckBox("แปลเมนู / เควสต์เองเมื่อหน้าจอนิ่ง (ไม่ต้องกด F9)")
         self.auto.setToolTip("เมื่อภาพทั้งจอหยุดนิ่ง เช่น เปิดเมนู จะแปลข้อความทั้งหน้าให้เอง\n"
                              "ใช้เครื่องแปลมากขึ้น ถ้าใช้ API ที่มีโควตาควรระวัง")
@@ -216,6 +220,7 @@ class Panel(QWidget):
         dl.addLayout(g)
         dl.addWidget(self.auto)
         dl.addWidget(self.toasts)
+        dl.addWidget(self.english)
 
         # hotkeys
         keys, kl2 = card("ปุ่มลัดระหว่างเล่น")
@@ -281,7 +286,7 @@ class Panel(QWidget):
 
     # --- from the controller ----------------------------------------------------------------------------------
     def load(self, engine: str, font_scale: float, target: str, toasts: bool, auto_screen: bool = False,
-             model_size: str = "auto", auto_label: str = "", src_lang: str = "ja"):
+             model_size: str = "auto", auto_label: str = "", src_lang: str = "ja", english_keys: bool = True):
         self.auto.blockSignals(True)
         self.auto.setChecked(auto_screen)
         self.auto.blockSignals(False)
@@ -290,15 +295,16 @@ class Panel(QWidget):
             self.size.setItemText(0, f"อัตโนมัติ — เครื่องนี้: {auto_label}")
         self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
         self.size.blockSignals(False)
-        for w in (self.engine, self.font, self.target, self.toasts, self.src):
+        for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(True)
+        self.english.setChecked(english_keys)
         self.src.setCurrentIndex(max(0, self.src.findData(src_lang)))
         self.engine.setCurrentIndex(max(0, self.engine.findData(engine)))
         self.font.setValue(int(round(font_scale * 100)))
         self.font_val.setText(f"{self.font.value()}%")
         self.target.setCurrentIndex(max(0, self.target.findData(target)))
         self.toasts.setChecked(toasts)
-        for w in (self.engine, self.font, self.target, self.toasts, self.src):
+        for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(False)
         self._show_engine(engine)
 

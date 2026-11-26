@@ -34,7 +34,13 @@ SITE_LEAVE_OUT = ["pip", "pip-*", "_pytest", "pytest", "pytest-*", "py.py", "plu
                   "PySide6/av*.dll", "PySide6/sw*.dll",  # FFmpeg for Qt Multimedia
                   "PySide6/*.exe", "*.pyi", "PySide6/QtAxContainer*", "PySide6/Qt6PrintSupport*", "PySide6/QtPrintSupport*",
                   # the text reader's models: game-lens fetches the ones the game's language needs the first time
-                  "rapidocr/models/*.onnx"]
+                  "rapidocr/models/*.onnx",
+                  # only onnxruntime's model-converting tools use these (symbolic shapes, quantizing): reading does not
+                  "sympy", "sympy-*", "isympy.py", "mpmath", "mpmath-*", "onnxruntime/transformers", "onnxruntime/quantization",
+                  "onnxruntime/tools", "onnxruntime/datasets",
+                  "onnxruntime/capi/onnxruntime.dll",  # the C API for other languages: Python has its own (.pyd)
+                  "PySide6/translations",  # Qt's own dialogs in other languages: game-lens has none of them
+                  "PIL/_avif*"]  # AVIF pictures
 # Qt modules game-lens never loads (it uses Core, Gui, Widgets, Network): their DLLs, Python modules and tools
 QT_UNUSED = ["WebEngine", "WebChannel", "WebSockets", "WebView", "Quick", "Qml", "3D", "Pdf", "Multimedia",
              "Designer", "Charts", "DataVisualization", "Graphs", "Location", "Bluetooth", "Sensors", "ShaderTools",

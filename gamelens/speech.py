@@ -37,7 +37,7 @@ def fit_speaker(tl: str, gender: str) -> str:
         def particle(m):
             before, after = m.string[: m.start()], m.string[m.end():]
             asks = after.lstrip()[:1] in ("?", "？") or QUESTION.search(before) or before.endswith("นะ")
-            asks = asks or re.search(r"(คุณ|ท่าน)?\s*[A-Za-z][\w.]*\s*$", before)  # calling someone: "Starborn คะ"
+            asks = asks or re.search(r"(คุณ|ท่าน)?\s*[A-Za-z][A-Za-z.]*\s*$", before)  # calling someone: "Starborn คะ"
             return "คะ" if asks else "ค่ะ"
 
         tl = re.sub("ครับ" + END, particle, tl)

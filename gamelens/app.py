@@ -263,6 +263,7 @@ class Controller(QObject):
         self.panel.save_keys.connect(lambda v: self.pool.submit(self._save_keys, v))
         self.panel.test_engine.connect(lambda: self.pool.submit(self._test_engine))
         self.panel.font_scale_changed.connect(self.set_font_scale)
+        self.panel.font_family_changed.connect(self.set_font_family)
         self.panel.target_changed.connect(lambda code: self.set_profile(target=code))
         self.panel.src_lang_changed.connect(self.set_src_lang)
         self.panel.toasts_changed.connect(self.set_toasts)
@@ -499,6 +500,14 @@ class Controller(QObject):
             self.genders = None
             self.pool.submit(self.sync_glossary)
 
+    def set_font_family(self, family: str):
+        if not family or family == self.profile.font_family:
+            return
+        self.profile.font_family = family
+        self.profile.save()
+        self.overlay.family = family  # what is on screen now is drawn again in it (the fit is per family)
+        self.overlay.update()
+
     def set_font_scale(self, v: float):
         self.profile.font_scale = v
         self.profile.save()
@@ -583,7 +592,7 @@ class Controller(QObject):
     def load_panel(self):
         self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
                         self.auto_screen, self.settings.local_model, self.auto_label, self.profile.src_lang,
-                        self.settings.english_keys)
+                        self.settings.english_keys, self.profile.font_family)
         if getattr(self, "hwnd", None) is not None:
             self.panel.set_english_available(getattr(self, "keys_possible", True), self.settings.english_keys)
 
@@ -594,6 +603,7 @@ class Controller(QObject):
         if self.profile.engine not in ENGINE_BY_KEY:
             self.profile.engine = "hymt"
         self.profile.live_engine = self.services.engine_for(self.profile.engine)
+        self.overlay.family = self.profile.font_family
         if not os.environ.get("GAMELENS_PROFILE"):
             try:
                 self.settings.profile = path.relative_to(ROOT).as_posix()

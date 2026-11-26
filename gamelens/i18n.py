@@ -52,6 +52,9 @@ TH = {
     "Test": "ทดสอบ",
     "Display": "การแสดงผล",
     "Text size": "ขนาดตัวอักษร",
+    "Font": "แบบอักษร",
+    "The font of the translations drawn over the game (only fonts that have the letters of the language translated into are listed)":
+        "แบบอักษรของคำแปลที่แสดงทับบนเกม (แสดงเฉพาะแบบอักษรที่มีตัวอักษรของภาษาที่แปล)",
     "Game language": "ภาษาในเกม",
     "Translate into": "แปลเป็น",
     "App language": "ภาษาของโปรแกรม",

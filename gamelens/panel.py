@@ -5,7 +5,8 @@ from __future__ import annotations
 import webbrowser
 
 from PySide6.QtCore import QMargins, Qt, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
 
 from .i18n import LANGS, lang, t
@@ -80,6 +81,7 @@ class Panel(QWidget):
     save_keys = Signal(dict)
     test_engine = Signal()
     font_scale_changed = Signal(float)
+    font_family_changed = Signal(str)
     target_changed = Signal(str)
     src_lang_changed = Signal(str)
     toasts_changed = Signal(bool)
@@ -207,6 +209,12 @@ class Panel(QWidget):
         self.font_val.setFixedWidth(44)
         g.addWidget(self.font, 0, 1)
         g.addWidget(self.font_val, 0, 2)
+        g.addWidget(QLabel(t("Font")), 3, 0)
+        self.family = QFontComboBox()
+        self.family.setToolTip(t("The font of the translations drawn over the game (only fonts that have the letters "
+                                 "of the language translated into are listed)"))
+        self.family.currentFontChanged.connect(lambda f: self.font_family_changed.emit(f.family()))
+        g.addWidget(self.family, 3, 1, 1, 2)
         g.addWidget(QLabel(t("Game language")), 1, 0)
         self.src = QComboBox()
         for code, label in GAME_LANGS:
@@ -217,7 +225,8 @@ class Panel(QWidget):
         self.target = QComboBox()
         self.target.addItem(t("Thai"), "th")
         self.target.addItem(t("English"), "en")
-        self.target.currentIndexChanged.connect(lambda _: self.target_changed.emit(self.target.currentData()))
+        self.target.currentIndexChanged.connect(lambda _: (self._fonts_for(self.target.currentData()),
+                                                           self.target_changed.emit(self.target.currentData())))
         g.addWidget(self.target, 2, 1, 1, 2)
         self.toasts = QCheckBox(t("Show short status messages on the game screen"))
         self.toasts.toggled.connect(self.toasts_changed.emit)
@@ -296,8 +305,19 @@ class Panel(QWidget):
         return h.expandedTo(self.minimumSize()).grownBy(QMargins(0, 0, 12, 0))
 
     # --- from the controller ----------------------------------------------------------------------------------
+    def _fonts_for(self, target: str):
+        """List only the fonts that can write the language translated into."""
+        ws = QFontDatabase.WritingSystem.Thai if target == "th" else QFontDatabase.WritingSystem.Latin
+        if self.family.writingSystem() != ws:
+            self.family.blockSignals(True)
+            keep = self.family.currentFont()
+            self.family.setWritingSystem(ws)
+            self.family.setCurrentFont(keep)
+            self.family.blockSignals(False)
+
     def load(self, engine: str, font_scale: float, target: str, toasts: bool, auto_screen: bool = False,
-             model_size: str = "auto", auto_label: str = "", src_lang: str = "ja", english_keys: bool = True):
+             model_size: str = "auto", auto_label: str = "", src_lang: str = "ja", english_keys: bool = True,
+             font_family: str = ""):
         self.auto.blockSignals(True)
         self.auto.setChecked(auto_screen)
         self.auto.blockSignals(False)
@@ -314,6 +334,11 @@ class Panel(QWidget):
         self.font.setValue(int(round(font_scale * 100)))
         self.font_val.setText(f"{self.font.value()}%")
         self.target.setCurrentIndex(max(0, self.target.findData(target)))
+        self._fonts_for(target)
+        if font_family:
+            self.family.blockSignals(True)
+            self.family.setCurrentFont(QFont(font_family))
+            self.family.blockSignals(False)
         self.toasts.setChecked(toasts)
         for w in (self.engine, self.font, self.target, self.toasts, self.src, self.english):
             w.blockSignals(False)

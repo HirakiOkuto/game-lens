@@ -31,6 +31,13 @@ def has_source_text(text: str, src_lang: str) -> bool:
     return bool(pat.search(text)) if pat else any(c.isalpha() for c in text)
 
 
+def known(text: str, seen: list[str]) -> bool:
+    """Whether a look at a screen already read has this text: read alike, or a part of what was read (a title half
+    under a list's fading edge comes out now whole, now in pieces: 紀行 of ダンハレイ紀行), or what was read is a part
+    of it."""
+    return any(similar(text, t) >= 0.75 or (len(t) >= 2 and (text in t or t in text)) for t in seen)
+
+
 def lines_to_translate(lines: list[dict], skip: list, src_lang: str = "ja", min_conf: float = 0.75) -> list[dict]:
     """Lines worth translating: in the source script, read with some confidence (an emblem or a pattern "read"
     as a character scores low), and not inside a region that translates itself."""

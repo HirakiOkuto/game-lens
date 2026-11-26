@@ -32,7 +32,7 @@ from .panel import Panel, usable_font
 from .picker import GamePicker
 from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import (TextSize, begins, marks_unchanged, text_marks, text_state, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
+from .screen import (TextSize, begins, known, marks_unchanged, text_marks, text_state, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
@@ -206,6 +206,10 @@ class Controller(QObject):
         self.screen_quiet = 0.0
         self.screen_count = 0  # lines of the screen being read (known once its text is read): many = a menu
         self.screen_read: list[str] = []  # the text that reading found
+        # what looks at this screen found that a reading then did not (a title half under the list's fading edge is
+        # read now whole, now in part, now not at all): known, so it does not set off a reading again, and again
+        self.screen_tried: list[str] = []
+        self.screen_more_n = 0  # readings set off by a look at this screen
         self.recheck_at, self.rechecking = 0.0, False
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
@@ -975,10 +979,13 @@ class Controller(QObject):
             return
         self.start_screen(frame, ink_map(frame, "any"), auto=False)
 
-    def start_screen(self, frame: np.ndarray, ref: np.ndarray, auto: bool, regions: bool = True):
-        """regions: leave the text inside the regions to them (not when they keep quiet for a menu)."""
+    def start_screen(self, frame: np.ndarray, ref: np.ndarray, auto: bool, regions: bool = True, more: bool = False):
+        """regions: leave the text inside the regions to them (not when they keep quiet for a menu). more: read again
+        because a look found new text on the same screen."""
         if self.screen_busy:
             return
+        if not more:
+            self.screen_tried, self.screen_more_n = [], 0
         self.screen_auto = auto
         self.screen_busy = True
         self.screen_count = 0
@@ -1042,7 +1049,7 @@ class Controller(QObject):
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if gen == self.screen_gen:
-                self.screen_read = [l["text"] for l in lines]
+                self.screen_read = [l["text"] for l in lines] + self.screen_tried
                 self.recheck_at = time.monotonic() + 3
             if not lines:
                 self.bridge.screen_done.emit(gen, None if auto else [])
@@ -1177,7 +1184,7 @@ class Controller(QObject):
                 self.screen_ref, self.screen_marks = None, []
                 self.screen_menu = menu
                 self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
-            elif not self.screen_busy and not self.rechecking and time.monotonic() > self.recheck_at:
+            elif not self.screen_busy and not self.rechecking and time.monotonic() > self.recheck_at                     and self.screen_more_n < 2:
                 # small new text (a panel's "no items", a label that appears) changes too little of the screen to be
                 # seen in its strokes: every few seconds the screen is read again, which on the graphics card is
                 # quick, and only text it did not have before counts
@@ -1197,8 +1204,7 @@ class Controller(QObject):
             p = self.profile
             ocr = self.api.ocr_lines(frame, p.src_lang, kind="screen-look", frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], [], p.src_lang)
-            new = [l["text"] for l in lines
-                   if len(l["text"]) >= 2 and not any(similar(l["text"], t) >= 0.75 for t in self.screen_read)]
+            new = [l["text"] for l in lines if len(l["text"]) >= 2 and not known(l["text"], self.screen_read)]
             if new:
                 self.bridge.screen_more.emit(gen, new)
         except Exception as e:  # noqa: BLE001 - only a look: the next one comes
@@ -1213,11 +1219,13 @@ class Controller(QObject):
         if frame is None:
             return
         log.info("screen: new text %s", new[:3])
+        self.screen_tried += new
+        self.screen_more_n += 1
         auto, menu = self.screen_auto, self.screen_menu
         self.screen_gen += 1
         self.screen_ref, self.screen_marks = None, []
         self.screen_menu = menu
-        self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
+        self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu, more=True)
 
     def drop_changed_items(self, frame: np.ndarray):
         """Take away the screen translations whose original text changed or is covered now (a pop-up, another tab),

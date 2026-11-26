@@ -1186,3 +1186,40 @@ def test_letters_at_the_end_of_a_line_on_a_gradient_are_found():
     assert a.box[0] <= 49  # starts where the line starts, not after 絆心
     x0 = a.mask_box[0]
     assert (a.mask[:, 47 - x0 : 80 - x0] > 0).sum() > 120  # 絆心 is covered
+
+
+def test_a_title_read_differently_each_look_does_not_reread_the_screen_forever():
+    """A list whose last row is half under its fading edge: each look reads those titles differently (真紅, 紀行,
+    ダンハレイ紀行, then nothing), and every look had set off a whole new reading and translation, every few seconds."""
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+    from gamelens.screen import known
+
+    assert known("紀行", ["ダンハレイ紀行"]) and known("ダンハレイ紀行", ["紀行"]) and known("ダンハレイ紀行", ["ダンハレイ紀行。"])
+    assert not known("真紅", ["ダンハレイ紀行", "所持合計数"]) and not known("真紅", [])
+
+    looks = iter([["真紅", "ダンハレイ紀行"], ["紀行"], ["真紅"], ["新しい報酬"]])
+    sent = []
+    c = SimpleNamespace(profile=SimpleNamespace(src_lang="ja"), screen_read=["ダンハレイ紀行"], rechecking=True,
+                        api=SimpleNamespace(ocr_lines=lambda *a, **k: {"lines": [
+                            {"text": t, "bbox": [0, 0, 40, 16], "conf": 0.99} for t in next(looks)]}),
+                        bridge=SimpleNamespace(screen_more=SimpleNamespace(emit=lambda gen, new: sent.append(new))))
+    frame = np.zeros((40, 40, 3), np.uint8)
+    Controller.job_recheck(c, frame, 1)
+    assert sent == [["真紅"]] and c.rechecking is False
+    c.screen_read += ["真紅"]  # (what set off a reading is known after it, read again or not: see on_screen_more)
+    Controller.job_recheck(c, frame, 1)
+    Controller.job_recheck(c, frame, 1)
+    assert sent == [["真紅"]]  # a piece of a known title, a title already tried: nothing new
+    Controller.job_recheck(c, frame, 1)
+    assert sent == [["真紅"], ["新しい報酬"]]  # text that really is new still counts
+
+    # what set off a reading is remembered for this screen, and a screen is read again so at most twice
+    started = []
+    m = SimpleNamespace(screen_gen=5, screen_ref=object(), screen_busy=False, screen_auto=True, screen_menu=True,
+                        screen_tried=[], screen_more_n=0, screen_marks=[],
+                        cap=SimpleNamespace(client_frame=lambda: (frame, None)),
+                        start_screen=lambda *a, **k: started.append(k))
+    Controller.on_screen_more(m, 5, ["真紅"])
+    assert m.screen_tried == ["真紅"] and m.screen_more_n == 1 and started[-1]["more"] is True

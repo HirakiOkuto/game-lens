@@ -7,6 +7,9 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# languages a game can be in (code for the server, name in the window)
+GAME_LANGS = [("ja", "ญี่ปุ่น"), ("ko", "เกาหลี"), ("zh", "จีนตัวย่อ (จีนแผ่นดินใหญ่)"), ("zh-tw", "จีนตัวเต็ม (ไต้หวัน / ฮ่องกง)"),
+              ("en", "อังกฤษ")]
 KINDS = ("dialog", "name", "subtitle", "choice")
 KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)", "name": "ชื่อผู้พูด", "subtitle": "ซับระหว่างเล่น",
                "choice": "ตัวเลือกคำตอบ"}
@@ -81,6 +84,50 @@ class Profile:
         d.pop("path")
         d.pop("live_engine")
         Path(self.path).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def guess_lang(text: str, default: str = "ja") -> str:
+    """The game's language from its window title: kana is Japanese, hangul Korean, Chinese characters alone Chinese
+    (traditional when it has letters only traditional Chinese uses)."""
+    import re
+
+    if re.search(r"[\u3040-\u30ff]", text):
+        return "ja"
+    if re.search(r"[\uac00-\ud7af]", text):
+        return "ko"
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return "zh-tw" if re.search(r"[們個這會來說為與對時開發戰鬥國學點從後裡]", text) else "zh"
+    return default
+
+
+def find_profile(exe: str, folder: Path = ROOT / "profiles") -> Path | None:
+    """The profile of the game whose program is `exe`, if there is one."""
+    exe = (exe or "").lower()
+    for p in sorted(folder.glob("*.json")):
+        try:
+            if exe and json.loads(p.read_text(encoding="utf-8")).get("exe", "").lower() == exe:
+                return p
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def new_profile(exe: str, title: str, base: "Profile", folder: Path = ROOT / "profiles") -> "Profile":
+    """A profile for a game game-lens has not seen: named after its program, the engine and display settings of
+    the one in use, no regions yet, the language guessed from the window title."""
+    import re
+
+    stem = Path(exe).stem if exe else (title or "game")
+    slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "game"
+    path, n = folder / f"{slug}.json", 2
+    while path.exists():
+        path, n = folder / f"{slug}-{n}.json", n + 1
+    p = Profile(name=(title or stem)[:60], series=slug, exe=exe, src_lang=guess_lang(title or "", base.src_lang),
+                target=base.target, engine=base.engine, font_family=base.font_family, font_scale=base.font_scale,
+                player_gender=base.player_gender, path=str(path))
+    folder.mkdir(parents=True, exist_ok=True)
+    p.save()
+    return p
 
 
 @dataclass

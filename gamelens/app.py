@@ -12,6 +12,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, Qt, QTimer, Signal
@@ -26,7 +27,7 @@ from .history import HistoryLog, HistoryWindow
 from .overlay import Overlay
 from .panel import Panel
 from .picker import GamePicker
-from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
+from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
 from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
@@ -129,6 +130,9 @@ def region_px(rect: list[float], shape) -> tuple[int, int, int, int]:
     return x, y, max(1, min(w, W - x)), max(1, min(h, H - y))
 
 
+LANG_NAMES = dict(GAME_LANGS)
+
+
 class Controller(QObject):
     def __init__(self, app: QApplication):
         super().__init__()
@@ -199,8 +203,8 @@ class Controller(QObject):
         pick = pick_local("auto", self.services.vram)[0]
         auto = "Index-Translate 9B" if pick == "index" else HYMT[pick][0]
         where = f"การ์ดจอ {self.services.vram:.0f} GB" if self.services.vram >= 1 else "ไม่มีการ์ดจอแยก"
-        self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
-                        self.auto_screen, self.settings.local_model, f"{auto}, {where}")
+        self.auto_label = f"{auto}, {where}"
+        self.load_panel()
         self.panel.model_size_changed.connect(self.set_model_size)
         self.panel.auto_screen_changed.connect(self.set_auto_screen)
         self.panel.toggle.connect(self.toggle)
@@ -212,6 +216,7 @@ class Controller(QObject):
         self.panel.test_engine.connect(lambda: self.pool.submit(self._test_engine))
         self.panel.font_scale_changed.connect(self.set_font_scale)
         self.panel.target_changed.connect(lambda t: self.set_profile(target=t))
+        self.panel.src_lang_changed.connect(lambda s: self.set_profile(src_lang=s))
         self.panel.toasts_changed.connect(self.set_toasts)
         self.panel.show_history.connect(self.show_history)
         self.panel.make_shortcut.connect(self.make_shortcut)
@@ -371,7 +376,8 @@ class Controller(QObject):
         elif self.hwnd is None:
             self.panel.s_game.set("warn", f"รอเกมเปิด… ({p.exe or p.title}) • ตั้งเกมเป็น Borderless/Windowed", "เปลี่ยน")
         else:
-            self.panel.s_game.set("ok", win32.window_title(self.hwnd)[:60] or p.exe, "เปลี่ยน")
+            self.panel.s_game.set("ok", f"{win32.window_title(self.hwnd)[:50] or p.exe} • {LANG_NAMES.get(p.src_lang, p.src_lang)}",
+                                  "เปลี่ยน")
         # 3. regions
         if not p.regions:
             if self.hwnd is None:
@@ -507,12 +513,50 @@ class Controller(QObject):
             self.notify("game-lens", "สร้างไอคอน game-lens บน Desktop แล้ว — ครั้งต่อไปดับเบิลคลิกได้เลย")
 
     # --- game window ------------------------------------------------------------------------------------------
+    def load_panel(self):
+        self.panel.load(self.profile.engine, self.profile.font_scale, self.profile.target, self.settings.toasts,
+                        self.auto_screen, self.settings.local_model, self.auto_label, self.profile.src_lang)
+
+    def switch_profile(self, path: Path):
+        """Another game: its own regions, language and names. Remembered as the game to open next time."""
+        self.detach()
+        self.profile = Profile.load(path)
+        self.profile.live_engine = self.services.engine_for(self.profile.engine)
+        if not os.environ.get("GAMELENS_PROFILE"):
+            try:
+                self.settings.profile = path.relative_to(ROOT).as_posix()
+            except ValueError:
+                self.settings.profile = str(path)
+            self.settings.save()
+        self.genders = None
+        self.shown.clear()
+        self.shown_seq.clear()
+        self.readings.clear()
+        self.sizes.clear()
+        self.context.clear()
+        self.reset_watchers()
+        self.load_panel()
+        self.pool.submit(self.sync_glossary)
+        log.info("profile %s (%s)", path.name, self.profile.src_lang)
+        self.refresh_panel()
+
     def pick_window(self):
         dlg = GamePicker(self.panel)
         if dlg.exec() and dlg.result_window:
             w = dlg.result_window
-            self.profile.exe, self.profile.title = w["exe"], ""
-            self.profile.save()
+            same = (w["exe"] or "").lower() == (self.profile.exe or "").lower()
+            if not same and self.profile.exe:  # another game: its own profile (made now if it is new)
+                found = find_profile(w["exe"])
+                path = found or Path(new_profile(w["exe"], w.get("title", ""), self.profile).path)
+                self.switch_profile(path)
+                if not found:
+                    self.toast(f"โปรไฟล์ใหม่สำหรับ {self.profile.name} — ตั้งภาษาในเกมและกรอบข้อความ (F10)", 6)
+            else:
+                if not self.profile.exe and not self.profile.regions:
+                    self.profile.src_lang = guess_lang(w.get("title", ""), self.profile.src_lang)
+                    self.load_panel()
+                self.profile.exe, self.profile.title = w["exe"], ""
+                self.profile.save()
             self.detach()
             self.next_attach = 0.0
             self.attach()
@@ -534,6 +578,10 @@ class Controller(QObject):
         self.next_attach = now + 1.0
         hwnd = win32.find_window(self.profile.exe, self.profile.title)
         if not hwnd:
+            other = self.other_game_running(now)
+            if other:
+                self.switch_profile(other)
+                self.next_attach = 0.0
             return
         try:
             self.cap = GameCapture(hwnd)
@@ -550,6 +598,23 @@ class Controller(QObject):
             self.toast("game-lens พร้อมแปล • กด F8 ค้างเพื่อดูต้นฉบับ", 4)
         else:
             self.show_panel()
+
+    def other_game_running(self, now: float) -> Path | None:
+        """The profile of another known game that is open while this profile's game is not (every few seconds)."""
+        if os.environ.get("GAMELENS_PROFILE") or now < getattr(self, "next_other", 0.0):
+            return None
+        self.next_other = now + 5.0
+        mine = Path(self.profile.path).resolve()
+        for p in sorted((ROOT / "profiles").glob("*.json")):
+            if p.resolve() == mine:
+                continue
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if (d.get("exe") or d.get("title")) and win32.find_window(d.get("exe", ""), d.get("title", "")):
+                return p
+        return None
 
     def reset_watchers(self):
         paid = self.profile.engine in REMOTE and self.profile.engine != "google_free"

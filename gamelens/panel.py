@@ -8,7 +8,7 @@ from PySide6.QtCore import QMargins, Qt, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
 
-from .profile import ENGINE_BY_KEY, ENGINE_INFO
+from .profile import GAME_LANGS, ENGINE_BY_KEY, ENGINE_INFO
 from .ui_style import BAD, IDLE, OK, WARN
 
 COLORS = {"ok": OK, "warn": WARN, "bad": BAD, "idle": IDLE}
@@ -80,6 +80,7 @@ class Panel(QWidget):
     test_engine = Signal()
     font_scale_changed = Signal(float)
     target_changed = Signal(str)
+    src_lang_changed = Signal(str)
     toasts_changed = Signal(bool)
     auto_screen_changed = Signal(bool)
     show_history = Signal()
@@ -194,12 +195,18 @@ class Panel(QWidget):
         self.font_val.setFixedWidth(44)
         g.addWidget(self.font, 0, 1)
         g.addWidget(self.font_val, 0, 2)
-        g.addWidget(QLabel("แปลเป็น"), 1, 0)
+        g.addWidget(QLabel("ภาษาในเกม"), 1, 0)
+        self.src = QComboBox()
+        for code, label in GAME_LANGS:
+            self.src.addItem(label, code)
+        self.src.currentIndexChanged.connect(lambda _: self.src_lang_changed.emit(self.src.currentData()))
+        g.addWidget(self.src, 1, 1, 1, 2)
+        g.addWidget(QLabel("แปลเป็น"), 2, 0)
         self.target = QComboBox()
         self.target.addItem("ภาษาไทย", "th")
         self.target.addItem("English", "en")
         self.target.currentIndexChanged.connect(lambda _: self.target_changed.emit(self.target.currentData()))
-        g.addWidget(self.target, 1, 1, 1, 2)
+        g.addWidget(self.target, 2, 1, 1, 2)
         self.toasts = QCheckBox("แสดงข้อความสถานะสั้นๆ บนจอเกม")
         self.toasts.toggled.connect(self.toasts_changed.emit)
         self.auto = QCheckBox("แปลเมนู / เควสต์เองเมื่อหน้าจอนิ่ง (ไม่ต้องกด F9)")
@@ -269,7 +276,7 @@ class Panel(QWidget):
 
     # --- from the controller ----------------------------------------------------------------------------------
     def load(self, engine: str, font_scale: float, target: str, toasts: bool, auto_screen: bool = False,
-             model_size: str = "auto", auto_label: str = ""):
+             model_size: str = "auto", auto_label: str = "", src_lang: str = "ja"):
         self.auto.blockSignals(True)
         self.auto.setChecked(auto_screen)
         self.auto.blockSignals(False)
@@ -278,14 +285,15 @@ class Panel(QWidget):
             self.size.setItemText(0, f"อัตโนมัติตามการ์ดจอ (เครื่องนี้: {auto_label})")
         self.size.setCurrentIndex(max(0, self.size.findData(model_size)))
         self.size.blockSignals(False)
-        for w in (self.engine, self.font, self.target, self.toasts):
+        for w in (self.engine, self.font, self.target, self.toasts, self.src):
             w.blockSignals(True)
+        self.src.setCurrentIndex(max(0, self.src.findData(src_lang)))
         self.engine.setCurrentIndex(max(0, self.engine.findData(engine)))
         self.font.setValue(int(round(font_scale * 100)))
         self.font_val.setText(f"{self.font.value()}%")
         self.target.setCurrentIndex(max(0, self.target.findData(target)))
         self.toasts.setChecked(toasts)
-        for w in (self.engine, self.font, self.target, self.toasts):
+        for w in (self.engine, self.font, self.target, self.toasts, self.src):
             w.blockSignals(False)
         self._show_engine(engine)
 

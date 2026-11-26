@@ -789,3 +789,20 @@ def test_index_translate_is_a_local_engine_that_downloads_itself():
     import dataclasses, json
     d = dataclasses.asdict(p); d.pop("path"); d.pop("live_engine")
     assert "live_engine" not in json.dumps(d)
+
+
+def test_each_game_gets_its_own_profile(tmp_path):
+    from gamelens.profile import Profile, find_profile, guess_lang, new_profile
+
+    assert guess_lang("アズールプロミリア") == "ja" and guess_lang("메이플스토리") == "ko"
+    assert guess_lang("原神") == "zh" and guess_lang("原神 開發中") == "zh-tw" and guess_lang("Game", "ko") == "ko"
+    base = Profile(name="Azur", series="azur", exe="AzurPromiliaJP.exe", engine="hymt", font_scale=0.8,
+                   path=str(tmp_path / "azur.json"))
+    base.save()
+    assert find_profile("azurpromiliajp.exe", tmp_path) == tmp_path / "azur.json"  # case does not matter
+    assert find_profile("Other.exe", tmp_path) is None
+    p = new_profile("BlueArchiveKR.exe", "블루 아카이브", base, tmp_path)
+    assert p.src_lang == "ko" and p.series == "bluearchivekr" and p.regions == [] and p.font_scale == 0.8
+    assert find_profile("BlueArchiveKR.exe", tmp_path) == tmp_path / "bluearchivekr.json"
+    again = new_profile("BlueArchiveKR.exe", "", base, tmp_path)
+    assert again.path.endswith("bluearchivekr-2.json") and again.src_lang == base.src_lang

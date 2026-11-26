@@ -254,13 +254,19 @@ def read_dialog(img: np.ndarray, lang: str, centred: bool, has_text) -> list[dic
 
     plain = read_lines(img, lang)
     best = good(plain)
-    doubtful = not best or len(best) < len([l for l in plain if has_text(l["text"])]) or min(l["conf"] for l in best) < 0.93
-    if not doubtful:
-        return best
     score = lambda ls: sum(len(l["text"]) * l["conf"] for l in ls)  # noqa: E731
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    again = good(read_lines(cv2.cvtColor(_levels(gray, 99.3), cv2.COLOR_GRAY2RGB), lang))
-    return again if score(again) > 1.03 * score(best) else best
+    doubtful = not best or len(best) < len([l for l in plain if has_text(l["text"])]) or min(l["conf"] for l in best) < 0.93
+    if doubtful:
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        again = good(read_lines(cv2.cvtColor(_levels(gray, 99.3), cv2.COLOR_GRAY2RGB), lang))
+        best = again if score(again) > 1.03 * score(best) else best
+    if sum(len(l["text"]) for l in best) <= 3:
+        # a word or two (うん。 응.): the detector can miss a lone glyph, or half of it; bigger, it finds it
+        k = 1.5
+        big = read_lines(cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC), lang)
+        big = good([dict(l, bbox=[round(v / k) for v in l["bbox"]], dbox=[round(v / k) for v in l["dbox"]]) for l in big])
+        best = big if score(big) > 1.03 * score(best) else best
+    return best
 
 
 def _name_variants(img: np.ndarray):

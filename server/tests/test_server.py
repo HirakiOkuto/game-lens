@@ -457,13 +457,17 @@ def test_read_dialog_ignores_text_that_is_not_centred_and_rereads_doubtful_lines
     pieces = [L(480, 100, "名付けて"), L(620, 150, "ベタベタ弾"), L(800, 20, "！")]
     readings(pieces)
     assert ocr.read_dialog(img, "ja", True, jp) == pieces  # one centred row in three pieces
-    readings([L(900, 160, "購入制限：0")], [L(900, 160, "購入制限：0")])
+    readings([L(900, 160, "購入制限：0")], [L(900, 160, "購入制限：0")], [L(1350, 240, "購入制限：0")])
     assert ocr.read_dialog(img, "ja", True, jp) == []  # a shop's text under the region is not dialogue
     readings([L(900, 160, "購入制限：0")])
     assert ocr.read_dialog(img, "ja", False, jp)  # ...a region with a left-aligned box takes it
     part, whole = [L(650, 250, "る……これは……？", 0.8)], [L(402, 500, "くっ……体がベタベタする……これは……？", 0.95)]
     readings(part, whole)
     assert ocr.read_dialog(img, "ja", True, jp) == whole and len(calls) == 2  # half a line over a bright scene: read again
+    lone = [L(620, 60, "うん。")]
+    readings([L(640, 30, "ん。")], [{**lone[0], "bbox": [930, 9, 90, 45], "dbox": [930, 9, 90, 54]}])
+    got = ocr.read_dialog(img, "ja", True, jp)
+    assert [l["text"] for l in got] == ["うん。"] and got[0]["bbox"] == [620, 6, 60, 30] and len(calls) == 2  # a word: read bigger
 
 
 def test_index_translate_gets_names_as_a_hard_constraint(monkeypatch):

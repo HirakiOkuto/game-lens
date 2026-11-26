@@ -107,6 +107,15 @@ class Panel(QWidget):
         tcol.addWidget(title)
         tcol.addWidget(sub)
         head.addLayout(tcol)
+        head.addStretch()
+        # the app's language, where one looks for it: top right
+        self.ui_lang = QComboBox()
+        for code, label in LANGS:
+            self.ui_lang.addItem("🌐  " + label, code)
+        self.ui_lang.setToolTip(t("App language"))
+        self.ui_lang.setCurrentIndex(max(0, self.ui_lang.findData(lang())))
+        self.ui_lang.currentIndexChanged.connect(lambda _: self.ui_lang_changed.emit(self.ui_lang.currentData()))
+        head.addWidget(self.ui_lang, 0, Qt.AlignmentFlag.AlignTop)
 
         # 1-2-3 checklist
         steps, sl = card(t("Getting ready"))
@@ -191,13 +200,6 @@ class Panel(QWidget):
         # display
         disp, dl = card(t("Display"))
         g = QGridLayout()
-        g.addWidget(QLabel(t("App language")), 3, 0)
-        self.ui_lang = QComboBox()
-        for code, label in LANGS:
-            self.ui_lang.addItem(label, code)
-        self.ui_lang.setCurrentIndex(max(0, self.ui_lang.findData(lang())))
-        self.ui_lang.currentIndexChanged.connect(lambda _: self.ui_lang_changed.emit(self.ui_lang.currentData()))
-        g.addWidget(self.ui_lang, 3, 1, 1, 2)
         g.addWidget(QLabel(t("Text size")), 0, 0)
         self.font = QSlider(Qt.Orientation.Horizontal, minimum=60, maximum=130)
         self.font.valueChanged.connect(lambda v: (self.font_val.setText(f"{v}%"), self.font_scale_changed.emit(v / 100)))

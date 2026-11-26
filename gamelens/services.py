@@ -61,6 +61,35 @@ def vram_gb() -> float:
         return 0.0
 
 
+# the text reader's model files, by the game's language (what server/ocr.py loads: PP-OCRv6's small detector and
+# medium recogniser; PP-OCRv5 for Korean). They live in rapidocr's own folder; rapidocr's list says where each
+# comes from. The portable build leaves them out: they are fetched the first time, like the translation model.
+OCR_FILES = {"ko": ["ch_PP-OCRv5_det_mobile.onnx", "korean_PP-OCRv5_rec_mobile.onnx"]}
+OCR_DEFAULT = ["PP-OCRv6_det_small.onnx", "PP-OCRv6_rec_medium.onnx"]
+OCR_ALWAYS = ["ch_ppocr_mobile_v2.0_cls_mobile.onnx"]  # loaded even though game text is never turned
+
+
+def ocr_files(lang: str) -> list[tuple[Path, str, str]]:
+    """(where, url, sha256) of the text reader's files for a game language; [] when rapidocr is not there."""
+    import importlib.util
+    import re
+
+    spec = importlib.util.find_spec("rapidocr")
+    if spec is None or not spec.origin:
+        return []
+    root = Path(spec.origin).parent
+    try:
+        listing = (root / "default_models.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    for name in OCR_ALWAYS + OCR_FILES.get((lang or "ja").lower().split("-")[0], OCR_DEFAULT):
+        m = re.search(r"model_dir:\s*(\S+/" + re.escape(name) + r")\s*\n\s*SHA256:\s*(\w+)", listing)
+        if m:
+            out.append((root / "models" / name, m.group(1), m.group(2)))
+    return out
+
+
 def pick_local(setting: str, vram: float) -> tuple[str, bool]:
     """(model, on the graphics card?) for the setting auto / index / 7b / 1.8b and a card with `vram` GB. auto:
     Index-Translate 9B where it fits next to a game (it read best in the tests), else Hy-MT2 1.8B."""
@@ -154,6 +183,24 @@ class ServerManager:
         where = t("graphics card {gb} GB", gb=f"{self.vram:.0f}") if self.hymt_gpu else t("on the CPU: no graphics card")
         return f"{MODEL_NAMES['index'] if engine == 'index' else HYMT[self.hymt][0]} ({where})"
 
+    def download_ocr(self, lang: str, say) -> bool:
+        """Fetch the text reader's model files for the game's language if they are missing (about 100 MB)."""
+        import hashlib
+
+        todo = [f for f in ocr_files(lang) if not f[0].exists()]
+        for i, (dest, url, sha) in enumerate(todo, 1):
+            label = t("Downloading the text reader {i}/{n}", i=i, n=len(todo))
+            if not self._fetch(url, dest, lambda pct, have, total: say(t(
+                    "{what} {pct}% ({have} / {total} MB) — only the first time", what=label, pct=pct,
+                    have=f"{have / 1e6:.0f}", total=f"{total / 1e6:.0f}")), say):
+                return False
+            if hashlib.sha256(dest.read_bytes()).hexdigest() != sha:
+                dest.unlink(missing_ok=True)
+                say(t("The model download failed ({error}) — open game-lens again to continue, or choose an online translator",
+                      error="checksum"))
+                return False
+        return True
+
     def download_model(self, engine: str, say) -> bool:
         """Fetch the engine's model file if it is missing (resumes a broken download). say(text) reports progress."""
         if engine == "hymt":
@@ -162,12 +209,17 @@ class ServerManager:
             name, url = INDEX_FILE
         else:
             return True
-        dest = self.models / name
+        return self._fetch(url, self.models / name, lambda pct, have, total: say(t(
+            "Downloading the translation model {pct}% ({have} / {total} GB) — only the first time", pct=pct,
+            have=f"{have / 1e9:.1f}", total=f"{total / 1e9:.1f}")), say)
+
+    def _fetch(self, url: str, dest: Path, progress, say) -> bool:
+        """Download url to dest (resuming a broken download from dest.part). progress(pct, have, total)."""
         if dest.exists():
             return True
-        part = dest.with_name(name + ".part")
+        part = dest.with_name(dest.name + ".part")
         try:
-            self.models.mkdir(parents=True, exist_ok=True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
             have = part.stat().st_size if part.exists() else 0
             headers = {"Range": f"bytes={have}-"} if have else {}
             with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=60) as r:
@@ -184,7 +236,7 @@ class ServerManager:
                         pct = int(100 * have / total) if total else 0
                         if pct != shown:
                             shown = pct
-                            say(t("Downloading the translation model {pct}% ({have} / {total} GB) — only the first time", pct=pct, have=f"{have / 1e9:.1f}", total=f"{total / 1e9:.1f}"))
+                            progress(pct, have, total)
             part.replace(dest)
             return True
         except (httpx.HTTPError, OSError, RuntimeError) as e:
@@ -222,8 +274,9 @@ class ServerManager:
         self._spawn("server", [str(py), "-m", "uvicorn", "app:app", "--host", "127.0.0.1", "--port", str(SERVER_PORT)],
                     self.root / "server", env)
 
-    def ensure(self, engine: str, on_change=None, timeout_s: float = 240):
-        """Blocking (run it in a worker): bring the server and the engine's model up. on_change(state, detail)."""
+    def ensure(self, engine: str, on_change=None, timeout_s: float = 240, ocr_lang: str = ""):
+        """Blocking (run it in a worker): bring the server and the engine's model up, after fetching the text
+        reader for the game language `ocr_lang` if it is missing. on_change(state, detail)."""
         with self.lock:
             def say(state, detail):
                 self.state, self.detail = state, detail
@@ -233,6 +286,9 @@ class ServerManager:
             problems = self.check(engine)
             if problems:
                 say("error", problems[0])
+                return False
+            if ocr_lang and not self.download_ocr(ocr_lang, lambda text: say("starting", text)):
+                say("error", self.detail)
                 return False
             if not self.server_up():
                 say("starting", t("Starting the translation system…"))

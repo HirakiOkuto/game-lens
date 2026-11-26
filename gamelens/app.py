@@ -262,7 +262,7 @@ class Controller(QObject):
         self.panel.test_engine.connect(lambda: self.pool.submit(self._test_engine))
         self.panel.font_scale_changed.connect(self.set_font_scale)
         self.panel.target_changed.connect(lambda code: self.set_profile(target=code))
-        self.panel.src_lang_changed.connect(lambda s: self.set_profile(src_lang=s))
+        self.panel.src_lang_changed.connect(self.set_src_lang)
         self.panel.toasts_changed.connect(self.set_toasts)
         self.panel.english_keys_changed.connect(self.set_english_keys)
         self.panel.show_history.connect(self.show_history)
@@ -321,6 +321,7 @@ class Controller(QObject):
     def start_services(self):
         engine = self.profile.live_engine
         threading.Thread(target=self.services.ensure, args=(engine, lambda s, d: self.bridge.server_state.emit(s, d)),
+                         kwargs={"ocr_lang": self.profile.src_lang},
                          daemon=True).start()
 
     def poll_status(self):
@@ -501,6 +502,11 @@ class Controller(QObject):
                 it.max_px = it.max_px / max(0.01, getattr(it, "_scale", v)) * v
                 it._scale = v
         self.overlay.update()
+
+    def set_src_lang(self, code: str):
+        self.set_profile(src_lang=code)
+        if self.settings.auto_start_server:
+            self.start_services()  # (fetches the text reader for that language if it is not there yet)
 
     def set_english_keys(self, on: bool):
         self.settings.english_keys = on

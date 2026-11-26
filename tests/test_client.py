@@ -900,3 +900,14 @@ def test_text_standing_still_while_a_character_moves_counts_as_still():
     grass = cv2.resize(rng.integers(0, 255, (60, 100, 3), np.uint8), (960, 540), interpolation=cv2.INTER_NEAREST)
     grass2 = cv2.resize(rng.integers(0, 255, (60, 100, 3), np.uint8), (960, 540), interpolation=cv2.INTER_NEAREST)
     assert stroke_change(stroke_map(grass, "any"), stroke_map(grass2, "any")) > STILL  # the world moving: not still
+
+
+def test_the_text_reader_files_for_each_game_language():
+    from gamelens.services import ocr_files
+
+    ja = [p.name for p, _, _ in ocr_files("ja")]
+    assert "PP-OCRv6_det_small.onnx" in ja and "PP-OCRv6_rec_medium.onnx" in ja
+    assert [p.name for p, _, _ in ocr_files("zh-tw")] == ja  # one multilingual model for Japanese and Chinese
+    ko = [p.name for p, _, _ in ocr_files("ko")]
+    assert "korean_PP-OCRv5_rec_mobile.onnx" in ko and "PP-OCRv6_rec_medium.onnx" not in ko
+    assert all(u.startswith("https://") and len(s) == 64 for _, u, s in ocr_files("ja"))

@@ -134,6 +134,8 @@ TH = {
     "{name} stopped (see logs/{name}.log)": "{name} หยุดทำงาน (ดูรายละเอียดใน logs/{name}.log)",
     "The translation system did not start in time (see logs/server.log)":
         "ระบบแปลภาษาเริ่มทำงานไม่ทันเวลา (ดูรายละเอียดใน logs/server.log)",
+    "Downloading the text reader {i}/{n}": "กำลังดาวน์โหลดตัวอ่านข้อความ {i}/{n}",
+    "{what} {pct}% ({have} / {total} MB) — only the first time": "{what} {pct}% ({have} / {total} MB) — เฉพาะครั้งแรกเท่านั้น",
     "Downloading the translation model {pct}% ({have} / {total} GB) — only the first time":
         "กำลังดาวน์โหลดโมเดลแปลภาษา {pct}% ({have} / {total} GB) — เฉพาะครั้งแรกเท่านั้น",
     "The model download failed ({error}) — open game-lens again to continue, or choose an online translator":

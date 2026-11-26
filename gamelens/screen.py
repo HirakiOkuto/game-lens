@@ -234,6 +234,25 @@ def ocr_region(api, crop: np.ndarray, kind: str, align: str, profile, frame_h: i
     return {"text": text, "lines": lines, "ms": ocr.get("ms", 0)}
 
 
+def looks_like_labels(lines: list[dict]) -> bool:
+    """Separate labels side by side (a menu's buttons under the dialogue region), not a row of dialogue: pieces of
+    one row far apart. A row of dialogue that the reader split (名付けて ベタベタ弾！) has a gap of a letter or so."""
+    rows: list[list[dict]] = []
+    for l in sorted(lines, key=lambda l: l["bbox"][1] + l["bbox"][3] / 2):
+        c, h = l["bbox"][1] + l["bbox"][3] / 2, l["bbox"][3]
+        if rows and abs(c - (rows[-1][0]["bbox"][1] + rows[-1][0]["bbox"][3] / 2)) < 0.5 * h:
+            rows[-1].append(l)
+        else:
+            rows.append([l])
+    for row in rows:
+        row.sort(key=lambda l: l["bbox"][0])
+        h = sorted(l["bbox"][3] for l in row)[len(row) // 2]
+        gaps = [b["bbox"][0] - (a["bbox"][0] + a["bbox"][2]) for a, b in zip(row, row[1:])]
+        if gaps and min(gaps) > 2.5 * h:
+            return True
+    return False
+
+
 def choice_items(crop: np.ndarray, px: tuple[int, int, int, int], lines: list[dict], translations: dict[str, str],
                  font_scale: float) -> list[Item]:
     """Overlay items for a list of answers to pick from: each one is laid over its own button, like a menu."""
@@ -253,13 +272,18 @@ def choice_items(crop: np.ndarray, px: tuple[int, int, int, int], lines: list[di
 def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], reading: dict, kind: str, align: str, ink: str,
                      profile, context: list[dict], strokes, sizes: TextSize, allow_cloud: bool) -> dict:
     """Translate a complete reading and lay the translation out. Worker thread; the replay tool uses it too."""
-    if kind == "choice":
-        lines = [l for l in reading["lines"] if has_source_text(l["text"], profile.src_lang)]
-        res = api.translate_lines([{"id": str(i), "src": l["text"], "kind": "dialog"} for i, l in enumerate(lines)],
-                                  series=profile.series, target=profile.target, src_lang=profile.src_lang,
-                                  engine=profile.engine, allow_cloud=allow_cloud, context=context)
+    labels = kind in ("dialog", "subtitle") and looks_like_labels(reading["lines"])
+    if kind == "choice" or labels:  # each piece on its own: answers to pick from, or a menu's labels
+        lines = [dict(l, text=l["text"].strip("・·•･.。 ")) for l in reading["lines"]]
+        lines = [l for l in lines if has_source_text(l["text"], profile.src_lang)]
+        res = api.translate_lines([{"id": str(i), "src": l["text"], "kind": "ui" if labels else "dialog"}
+                                   for i, l in enumerate(lines)], series=profile.series, target=profile.target,
+                                  src_lang=profile.src_lang, engine=profile.engine, allow_cloud=allow_cloud,
+                                  context=[] if labels else context)
         for i, l in enumerate(lines):
             l["id"] = str(i)
+        if labels:
+            kind = "labels"
         tls = res["lines"]
         items = choice_items(crop, px, lines, tls, profile.font_scale)
         return {"src": reading["text"], "tl": " / ".join(tls.get(str(i), "") for i in range(len(lines))), "items": items,

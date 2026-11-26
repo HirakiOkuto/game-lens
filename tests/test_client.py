@@ -726,3 +726,14 @@ def test_polite_particles_follow_the_speaker():
     he = lambda s: fit_speaker(s, "male")
     assert he("ได้คะแนนเยอะค่ะ") == "ได้คะแนนเยอะครับ" and he("จริงเหรอคะ?") == "จริงเหรอครับ?"
     assert fit_speaker("ไปกันครับ", "") == "ไปกันครับ"  # nobody known: as translated
+
+
+def test_menu_labels_under_the_dialogue_region_are_told_from_dialogue():
+    from gamelens.screen import looks_like_labels
+
+    row = lambda x, t, y=100, h=14: {"bbox": [x, y, 14 * len(t), h], "text": t}
+    menu = [row(60, "・ヘルプ"), row(190, "バッグ"), row(320, "星源の庭"), row(450, "実績")]
+    assert looks_like_labels(menu)
+    split = [row(100, "名付けて"), row(170, "ベタベタ弾！")]  # one row of dialogue read in two pieces
+    assert not looks_like_labels(split)
+    assert not looks_like_labels([row(100, "そうだな。"), row(100, "皆を集めてくれ。", y=140)])

@@ -741,3 +741,17 @@ def test_menu_labels_under_the_dialogue_region_are_told_from_dialogue():
     split = [row(100, "名付けて"), row(170, "ベタベタ弾！")]  # one row of dialogue read in two pieces
     assert not looks_like_labels(split)
     assert not looks_like_labels([row(100, "そうだな。"), row(100, "皆を集めてくれ。", y=140)])
+
+
+def test_local_model_size_follows_the_graphics_card():
+    from gamelens.services import HYMT, ServerManager, pick_hymt
+
+    assert pick_hymt("auto", 16) == ("7b", True) and pick_hymt("auto", 12) == ("7b", True)
+    assert pick_hymt("auto", 8) == ("1.8b", True) and pick_hymt("auto", 4) == ("1.8b", True)
+    assert pick_hymt("auto", 0) == ("1.8b", False) and pick_hymt("auto", 1.5) == ("1.8b", False)  # no card: CPU
+    assert pick_hymt("7b", 6) == ("7b", True) and pick_hymt("1.8b", 16) == ("1.8b", True)  # chosen by hand
+    assert set(HYMT) == {"7b", "1.8b"} and all(f.endswith(".gguf") for _, f, _ in HYMT.values())
+    from gamelens.profile import ROOT
+
+    m = ServerManager(ROOT, ROOT / "logs", ROOT / "models", "1.8b")
+    assert m.model_name("hymt").startswith("Hy-MT2 1.8B") and m.model_name("local") == "Gemma 26B"

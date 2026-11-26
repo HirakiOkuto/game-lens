@@ -1,11 +1,8 @@
 ﻿# game-lens: first-time setup on a new computer. Run setup.bat (or this file) once; afterwards open game-lens
 # with start.bat or the Desktop icon it makes.
-#   .\setup.ps1            install everything, download the translation model (4.6 GB)
-#   .\setup.ps1 -NoModel   skip the model (use Google / DeepL / Azure, which need no graphics card)
-param([switch]$NoModel)
+#   .\setup.ps1            install everything (the translation model is downloaded by game-lens itself)
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
-$ModelUrl = "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf"
 $LlamaUrl = "https://github.com/ggml-org/Llama-Windows/releases"
 
 function Step($t) { Write-Host ""; Write-Host "== $t" -ForegroundColor Cyan }
@@ -36,24 +33,8 @@ if (Get-Command llama -ErrorAction SilentlyContinue) {
     Write-Host "  (ไม่ติดตั้งก็ได้ ถ้าจะใช้ Google / DeepL / Azure แทน)"
 }
 
-Step "4/4 โมเดลแปล Hy-MT2 7B"
-$model = "models\Hy-MT2-7B-Q4_K_M.gguf"
-if ($NoModel) {
-    Write-Host "ข้าม (-NoModel)"
-} elseif (Test-Path $model) {
-    Write-Host "มีอยู่แล้ว"
-} else {
-    New-Item -ItemType Directory -Force models | Out-Null
-    Write-Host "กำลังดาวน์โหลด 4.6 GB จาก Hugging Face ... (ปิดหน้าต่างได้ รันใหม่จะเริ่มโหลดใหม่)"
-    try {
-        Start-BitsTransfer -Source $ModelUrl -Destination "$model.part" -DisplayName "game-lens model"
-        Move-Item "$model.part" $model -Force
-        Write-Host "เสร็จ"
-    } catch {
-        Write-Host "ดาวน์โหลดไม่สำเร็จ: $_" -ForegroundColor Red
-        Write-Host "โหลดเองได้จาก $ModelUrl แล้ววางไฟล์ไว้ที่ $PSScriptRoot\$model"
-    }
-}
+Step "4/4 โมเดลแปล"
+Write-Host "game-lens ดาวน์โหลดเองตอนเปิดครั้งแรก: Hy-MT2 7B (4.6 GB) ถ้าการ์ดจอมี 10 GB ขึ้นไป ไม่อย่างนั้นรุ่น 1.8B (1.1 GB)"
 
 Write-Host ""
 Write-Host "ติดตั้งเสร็จ — เปิดโปรแกรมด้วย start.bat แล้วกดปุ่ม 'สร้างไอคอนบน Desktop'" -ForegroundColor Green

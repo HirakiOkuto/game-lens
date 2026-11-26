@@ -16,15 +16,51 @@ CREATE_NO_WINDOW = 0x08000000
 SERVER_PORT = 9960
 MODELS = {
     # engine -> (port, llama serve arguments); only one fits in VRAM next to the game
-    "hymt": (9943, ["-m", "{models}/Hy-MT2-7B-Q4_K_M.gguf", "--port", "9943", "-c", "8192", "--jinja",
-                    "--alias", "hymt7b"]),
+    "hymt": (9943, ["-m", "{models}/{hymt}", "--port", "9943", "-c", "8192", "--jinja", "--alias", "hymt"]),
     "local": (9940, ["-hf", "unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M", "--no-mmproj", "--port", "9940", "-c", "16384",
                      "--jinja", "--alias", "gemma26b"]),
 }
-MODEL_NAMES = {"hymt": "Hy-MT2 7B", "local": "Gemma 26B"}
-# downloaded by itself into the models folder when it is not there
-MODEL_FILES = {"hymt": ("Hy-MT2-7B-Q4_K_M.gguf",
-                        "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf")}
+MODEL_NAMES = {"hymt": "Hy-MT2", "local": "Gemma 26B"}
+# Hy-MT2 comes in two sizes: (name, file, where it is downloaded from by itself when it is not there)
+HYMT = {
+    "7b": ("Hy-MT2 7B", "Hy-MT2-7B-Q4_K_M.gguf",
+           "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf"),
+    "1.8b": ("Hy-MT2 1.8B", "Hy-MT2-1.8B-Q4_K_M.gguf",
+             "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf"),
+}
+BIG_CARD_GB = 10  # 7B takes about 5.5 GB of graphics memory, and the game wants its share too
+SMALL_CARD_GB = 3  # less than that (or an integrated chip): the model runs on the processor
+
+
+def vram_gb() -> float:
+    """Memory of the biggest graphics card, from what its driver writes in the registry (any maker). 0 if none."""
+    try:
+        import winreg
+
+        best = 0
+        key = r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key) as k:
+            for i in range(64):
+                try:
+                    sub = winreg.EnumKey(k, i)
+                except OSError:
+                    break
+                try:
+                    with winreg.OpenKey(k, sub) as s:
+                        best = max(best, int(winreg.QueryValueEx(s, "HardwareInformation.qwMemorySize")[0]))
+                except (OSError, ValueError, TypeError):
+                    continue
+        return best / 2**30
+    except OSError:
+        return 0.0
+
+
+def pick_hymt(setting: str, vram: float) -> tuple[str, bool]:
+    """(size, on the graphics card?) for the setting 'auto' / '7b' / '1.8b' and a card with `vram` GB."""
+    gpu = vram >= SMALL_CARD_GB
+    if setting in HYMT:
+        return setting, gpu
+    return ("7b" if vram >= BIG_CARD_GB else "1.8b"), gpu
 
 
 def port_up(port: int, path: str = "/health") -> bool:
@@ -35,8 +71,10 @@ def port_up(port: int, path: str = "/health") -> bool:
 
 
 class ServerManager:
-    def __init__(self, root: Path, log_dir: Path, models_dir: Path | None = None):
+    def __init__(self, root: Path, log_dir: Path, models_dir: Path | None = None, hymt_size: str = "auto"):
         self.root = Path(root).resolve()
+        self.vram = vram_gb()
+        self.hymt, self.hymt_gpu = pick_hymt(hymt_size, self.vram)
         self.models = Path(models_dir or self.root / "models")  # folder with the .gguf translation models
         self.logs = Path(log_dir)
         self.logs.mkdir(parents=True, exist_ok=True)
@@ -76,11 +114,18 @@ class ServerManager:
             problems.append("ไม่พบโปรแกรม llama สำหรับโมเดลในเครื่อง — ติดตั้ง Llama for Windows หรือเลือกเครื่องแปลออนไลน์")
         return problems
 
+    def model_name(self, engine: str) -> str:
+        """The model this engine runs here, as the user sees it ("Hy-MT2 1.8B (การ์ดจอ 8 GB)")."""
+        if engine != "hymt":
+            return MODEL_NAMES.get(engine, engine)
+        where = f"การ์ดจอ {self.vram:.0f} GB" if self.hymt_gpu else "ใช้ CPU เพราะไม่มีการ์ดจอแยก"
+        return f"{HYMT[self.hymt][0]} ({where})"
+
     def download_model(self, engine: str, say) -> bool:
         """Fetch the engine's model file if it is missing (resumes a broken download). say(text) reports progress."""
-        if engine not in MODEL_FILES:
+        if engine != "hymt":
             return True
-        name, url = MODEL_FILES[engine]
+        _, name, url = HYMT[self.hymt]
         dest = self.models / name
         if dest.exists():
             return True
@@ -126,7 +171,9 @@ class ServerManager:
             if other != engine and other in self.procs:
                 self.stop(other)
         port, args = MODELS[engine]
-        args = [a.replace("{models}", self.models.as_posix()) for a in args]
+        args = [a.replace("{models}", self.models.as_posix()).replace("{hymt}", HYMT[self.hymt][1]) for a in args]
+        if engine == "hymt" and not self.hymt_gpu:
+            args += ["-ngl", "0"]  # no graphics card worth the name: all on the processor
         self._spawn(engine, [self.llama() or "llama", "serve", *args], self.root)
 
     def start_server(self):
@@ -154,11 +201,11 @@ class ServerManager:
             if not self.server_up():
                 say("starting", "กำลังเปิดระบบแปล…")
                 self.start_server()
-            if engine in MODEL_FILES and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
+            if engine == "hymt" and not self.model_up(engine) and not self.download_model(engine, lambda t: say("starting", t)):
                 say("error", self.detail)
                 return False
             if engine in MODELS and not self.model_up(engine):
-                say("starting", f"กำลังโหลด {MODEL_NAMES[engine]} (ครั้งแรกอาจใช้เวลาสักครู่)…")
+                say("starting", f"กำลังโหลด {self.model_name(engine)} (ครั้งแรกอาจใช้เวลาสักครู่)…")
                 self.start_model(engine)
             t0 = time.monotonic()
             while time.monotonic() - t0 < timeout_s:

@@ -12,8 +12,8 @@ KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)
                "choice": "ตัวเลือกคำตอบ"}
 # engines the server knows, in the order the user sees them; remote ones send text off this machine
 ENGINE_INFO = [
-    {"key": "hymt", "name": "Hy-MT2 7B — ในเครื่อง (แนะนำ)",
-     "desc": "เร็ว ฟรี ไม่ต้องใช้เน็ต • ใช้การ์ดจอ ~5 GB", "keys": []},
+    {"key": "hymt", "name": "Hy-MT2 — ในเครื่อง (แนะนำ)",
+     "desc": "เร็ว ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง: 7B (การ์ดจอ 10 GB ขึ้นไป) หรือ 1.8B", "keys": []},
     {"key": "local", "name": "Gemma 26B — ในเครื่อง",
      "desc": "แปลสวยที่สุดในเครื่อง เข้าใจบริบท • ใช้การ์ดจอมาก อาจทำให้เกมกระตุก", "keys": []},
     {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร",
@@ -88,6 +88,7 @@ class Settings:
     peek_key: str = "F8"  # hold to see the original text (polled, not captured: the game still gets the key)
     context_lines: int = 6
     models_dir: str = "D:/AI/models"  # shared folder with the .gguf translation models
+    local_model: str = "auto"  # Hy-MT2 size: auto (by the graphics card's memory) / 7b / 1.8b
     auto_start_server: bool = True  # start the server + local model when game-lens starts
     stop_server_on_exit: bool = True  # ...and stop what we started when it quits
     start_hidden: bool = False  # open only the tray icon once setup is complete

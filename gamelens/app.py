@@ -30,7 +30,7 @@ from .profile import ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
 from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
-from .services import MODEL_NAMES, MODELS, ServerManager
+from .services import MODELS, ServerManager
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
 from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
@@ -140,7 +140,8 @@ class Controller(QObject):
             Profile(name=ppath.stem, series=ppath.stem, path=str(ppath)).save()
         self.profile = Profile.load(ppath)
         self.api = LensClient(self.settings.server, self.settings.resolve(self.settings.token_file))
-        self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir))
+        self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir),
+                                      self.settings.local_model)
         self.pool = ThreadPoolExecutor(8)  # reading and translating several regions at once, status polls, screens
         self.bridge = Bridge()
         self.bridge.region_read.connect(self.on_region_read)
@@ -340,7 +341,7 @@ class Controller(QObject):
         # 1. translation system
         svc = self.services
         if self.health and self.health.get(eng):
-            self.panel.s_server.set("ok", f"พร้อม — {info['name']}")
+            self.panel.s_server.set("ok", f"พร้อม — {svc.model_name(eng) if eng in MODELS else info['name']}")
         elif svc.state == "starting":
             self.panel.s_server.set("warn", svc.detail)
         elif not self.health:
@@ -348,7 +349,7 @@ class Controller(QObject):
             self.panel.s_server.set("bad", msg, "เปิด", primary=True)
         elif not self.health.get(eng):
             if eng in MODELS:
-                self.panel.s_server.set("warn", f"ยังไม่ได้โหลด {MODEL_NAMES[eng]}", "โหลด", primary=True)
+                self.panel.s_server.set("warn", f"ยังไม่ได้โหลด {svc.model_name(eng)}", "โหลด", primary=True)
             elif info.get("keys"):
                 self.panel.s_server.set("warn", f"ยังไม่ได้ใส่ key ของ {info['name']} (ช่องด้านล่าง)")
             else:

@@ -832,3 +832,20 @@ def test_a_translated_screen_stays_while_something_else_moves():
     tip[220:250, 490:1000] = 60  # the long line (a tip) was replaced
     assert not text_still_there(tip, marks)
     assert not text_still_there(cv2.resize(rng.integers(40, 90, (30, 50, 3), np.uint8), (1000, 600)), marks)  # another page
+
+
+def test_screen_text_changed_or_gone():
+    from gamelens.screen import text_marks, text_state
+
+    pic = np.full((600, 800, 3), 70, np.uint8)
+    boxes = []
+    texts = ["Attack power", "Defence power", "Critical rate", "Break value", "EX strength", "Tap to go on now"]
+    for i, text in enumerate(texts):  # a menu of labels, and a tip (the last line)
+        cv2.putText(pic, text, (60, 60 + 70 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (240, 240, 240), 2, cv2.LINE_AA)
+        boxes.append([56, 38 + 70 * i, 17 * len(text) + 10, 30])
+    marks = text_marks(pic, boxes, texts)
+    assert text_state(pic, marks) == "same"
+    tip = pic.copy()
+    tip[38 + 350 - 4 : 38 + 350 + 34, :] = 70  # the tip went (the next one comes)
+    assert text_state(tip, marks) == "changed"
+    assert text_state(np.full_like(pic, 70), marks) == "gone"  # another screen

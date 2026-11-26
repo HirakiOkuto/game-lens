@@ -52,14 +52,15 @@ def text_marks(frame: np.ndarray, boxes, texts=None) -> list:
     return out
 
 
-def text_still_there(frame: np.ndarray, marks: list) -> bool:
-    """Is the text that was translated still on screen as it was? A box whose edges are mostly gone has other text
-    now (or none). A short label or two may flicker over something moving; a sentence that changed (the next tip
-    in a bubble), or a good part of all the text, means the translation no longer fits."""
+def text_state(frame: np.ndarray, marks: list) -> str:
+    """Is the text that was translated still on screen as it was? 'same'; 'changed' when part of it changed on a
+    screen that is still there (the next tip in a bubble, a value's label); 'gone' when most of it went (another
+    page, a closed menu). A box whose edges are mostly gone has other text now (or none); a short label or two may
+    flicker over something moving."""
     if not marks:
-        return True
+        return "same"
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-    gone = 0
+    gone, sentence = 0, False
     total = sum(n for _, _, n in marks)
     for (x, y, w, h), edges, n in marks:
         crop = gray[y : y + h, x : x + w]
@@ -68,10 +69,15 @@ def text_still_there(frame: np.ndarray, marks: list) -> bool:
         now = cv2.dilate((cv2.Canny(crop, 60, 160) > 0).astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
         e = int(edges.sum())
         if e and (edges & now).sum() < 0.6 * e:
-            if n >= 8:
-                return False
             gone += n
-    return gone < 0.2 * total
+            sentence = sentence or n >= 8
+    if gone >= 0.6 * total:
+        return "gone"
+    return "changed" if sentence or gone >= 0.2 * total else "same"
+
+
+def text_still_there(frame: np.ndarray, marks: list) -> bool:
+    return text_state(frame, marks) == "same"
 
 
 def common_heights(heights: list[int]) -> list[float]:

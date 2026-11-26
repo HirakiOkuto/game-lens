@@ -29,7 +29,7 @@ from .panel import Panel
 from .picker import GamePicker
 from .profile import GAME_LANGS, find_profile, guess_lang, new_profile, ENGINE_BY_KEY, KIND_LABELS, REMOTE, ROOT, Profile, Settings
 from .region_editor import RegionEditor
-from .screen import (TextSize, begins, text_marks, text_still_there, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
+from .screen import (TextSize, begins, text_marks, text_state, extend_item, lines_to_translate, merge_glossary, ocr_region, paragraphs, refresh_patch, remember,
                      requests, screen_items, translate_region)
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
@@ -185,7 +185,9 @@ class Controller(QObject):
         self.screen_gen = 0
         self.screen_ref: np.ndarray | None = None
         self.screen_frame: np.ndarray | None = None
-        self.screen_marks: list = []  # what the translated text looked like (see text_still_there)
+        self.screen_marks: list = []  # what the translated text looked like (see text_state)
+        self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
+        self.screen_auto = False
         self.screen_busy = False
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -618,6 +620,10 @@ class Controller(QObject):
                 return p
         return None
 
+    def reset_watchers_keep_overlay(self):
+        paid = self.profile.engine in REMOTE and self.profile.engine != "google_free"
+        self.watchers = {r.id: TextFollower(confirm=paid) for r in self.profile.regions}
+
     def reset_watchers(self):
         paid = self.profile.engine in REMOTE and self.profile.engine != "google_free"
         self.watchers = {r.id: TextFollower(confirm=paid) for r in self.profile.regions}
@@ -654,6 +660,8 @@ class Controller(QObject):
         if self.auto_screen:
             self.auto_screen_tick(frame, now)
         for r in self.profile.regions:
+            if self.screen_menu and self.screen_ref is not None:
+                break  # a menu translated as a whole: the regions would only translate pieces of it again
             px = region_px(r.rect, frame.shape)
             x, y, w, h = px
             crop = frame[y : y + h, x : x + w]
@@ -785,9 +793,11 @@ class Controller(QObject):
             return
         self.start_screen(frame, ink_map(frame, "any"), auto=False)
 
-    def start_screen(self, frame: np.ndarray, ref: np.ndarray, auto: bool):
+    def start_screen(self, frame: np.ndarray, ref: np.ndarray, auto: bool, regions: bool = True):
+        """regions: leave the text inside the regions to them (not when they keep quiet for a menu)."""
         if self.screen_busy:
             return
+        self.screen_auto = auto
         self.screen_busy = True
         self.screen_gen += 1
         self.screen_ref = ref
@@ -798,7 +808,7 @@ class Controller(QObject):
             self.toast("กำลังแปลทั้งหน้าจอ… (F9 / Esc ปิด)", 2)
         # lines inside a region that is showing its own translation are left to that region
         skip = [region_px(r.rect, frame.shape) for r in self.profile.regions
-                if self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text]
+                if regions and (self.overlay.items.get(r.id) or self.watchers[r.id].settled or self.watchers[r.id].last_text)]
         self.pool.submit(self.job_screen, frame, self.screen_gen, skip, auto)
 
     def auto_screen_tick(self, frame: np.ndarray, now: float):
@@ -863,11 +873,19 @@ class Controller(QObject):
             return
         self.auto_empties = 0 if items else self.auto_empties + 1
         if items is None:  # auto mode found nothing to translate: stay quiet
-            self.screen_ref = None
+            self.dismiss_screen()  # (and take away what an earlier reading of this screen put there)
             return
         if not items:
             self.toast("ไม่พบข้อความบนจอ", 2)
         self.overlay.set_items("screen", items)
+        # a menu (many labels; or asked for with F9): the regions' own translations would be pieces of it
+        self.screen_menu = len(items) >= 8 or not self.screen_auto
+        if self.screen_menu:
+            for r in self.profile.regions:
+                self.overlay.clear(r.id)
+                self.overlay.set_pending(r.id, None)
+            self.shown.clear()
+            self.reset_watchers_keep_overlay()
         self.screen_marks = text_marks(self.screen_frame, [b for it in items for b in getattr(it, "_boxes", [])])
 
     def check_screen_dismiss(self, frame: np.ndarray):
@@ -875,15 +893,20 @@ class Controller(QObject):
             self.dismiss_screen()
             return
         if self.screen_marks:
-            if not text_still_there(frame, self.screen_marks):
-                self.dismiss_screen()  # the text that was translated is gone: another page, a closed menu
+            state = text_state(frame, self.screen_marks)
+            if state == "changed":  # the same screen with some other text (the next tip): translate it again now;
+                self.screen_marks = []  # what is shown stays until the new translation replaces it
+                self.start_screen(frame, ink_map(frame, "any"), auto=self.screen_auto, regions=not self.screen_menu)
+            elif state == "gone":  # another page, a closed menu
+                self.dismiss_screen()
+                self.auto_done = None
             return
         now_map = ink_map(frame, "any")  # still being read: only a quite different screen counts
         if changed_pixels(self.screen_ref, now_map) > 0.25 * now_map.size:
             self.dismiss_screen()
 
     def dismiss_screen(self):
-        self.screen_ref, self.screen_marks = None, []
+        self.screen_ref, self.screen_marks, self.screen_menu = None, [], False
         self.screen_gen += 1
         self.overlay.set_pending("screen", None)
         self.overlay.clear("screen")

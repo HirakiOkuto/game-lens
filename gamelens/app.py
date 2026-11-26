@@ -32,6 +32,7 @@ from .screen import (TextSize, begins, extend_item, lines_to_translate, merge_gl
                      requests, screen_items, translate_region)
 from .services import MODEL_NAMES, MODELS, ServerManager
 from .ui_style import QSS
+from .speech import fit_speaker, gender_of, genders
 from .watcher import TextFollower, auto_pause, changed_pixels, goes_on, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
@@ -165,6 +166,7 @@ class Controller(QObject):
         self.shown_seq: dict[str, int] = {}
         self.region_active = 0.0  # when text in a region last changed
         self.auto_empties = 0  # times in a row that auto mode found nothing to translate
+        self.genders: dict[str, str] | None = None  # speaker name -> gender, from the glossary file
         self.held: dict[str, tuple] = {}  # translations that wait for a line to be read once more
         self.readings: dict[str, dict] = {}  # what was read last in each region
         self.sizes: dict[str, TextSize] = {}
@@ -284,6 +286,23 @@ class Controller(QObject):
         except LensError:
             self._keys_loaded = False
         self.bridge.status.emit(st)
+
+    def fit_speaker(self, payload: dict):
+        """Polite particles of the speaker's gender (the model cannot tell who speaks): the name on screen now."""
+        if payload.get("kind") not in ("dialog", "subtitle") or not payload.get("tl"):
+            return
+        if self.genders is None:
+            path = ROOT / "glossaries" / f"{self.profile.series}.{self.profile.target}.json"
+            try:
+                self.genders = genders(json.loads(path.read_text(encoding="utf-8"))) if path.exists() else {}
+            except (ValueError, OSError):
+                self.genders = {}
+        names = [self.watchers[r.id].last_text for r in self.profile.regions if r.kind == "name" and r.id in self.watchers]
+        gender = next((g for n in names if (g := gender_of(n, self.genders))), "")
+        if gender:
+            payload["tl"] = fit_speaker(payload["tl"], gender)
+            for it in payload.get("items", []):
+                it.text = fit_speaker(it.text, gender)
 
     def sync_glossary(self):
         """Names and terms kept in glossaries/<series>.<target>.json go to the server whenever it comes up."""
@@ -631,6 +650,7 @@ class Controller(QObject):
         if wt.in_doubt:
             self.held[rid] = (which, payload)  # until the next reading has come in
             return
+        self.fit_speaker(payload)
         if seq != wt.seq:  # more was typed meanwhile: better its beginning in the player's language than nothing
             if seq > self.shown_seq.get(rid, -1) and payload.get("items") and begins(got, self.readings[rid]):
                 self.shown[rid], self.shown_seq[rid] = payload, seq

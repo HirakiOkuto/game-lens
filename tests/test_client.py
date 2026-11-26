@@ -707,3 +707,22 @@ def test_choices_are_laid_over_their_own_buttons():
     same = items[0].patch
     refresh_patch(items[0], pic)
     assert items[0].patch is same  # nothing moved behind the buttons
+
+
+def test_polite_particles_follow_the_speaker():
+    from gamelens.speech import fit_speaker, gender_of, genders
+
+    known = genders({"characters": [{"src": "シンフォーリア", "tl": "Symphoria", "gender": "female", "aliases": []},
+                                    {"src": "イェクウ", "tl": "Yekuu", "gender": "male", "aliases": ["エクウ"]},
+                                    {"src": "ルオチン", "tl": "Luoqing", "gender": ""}]})
+    assert gender_of("シンフォーリア", known) == "female" and gender_of("エクウ", known) == "male"
+    assert gender_of("ルオチン", known) == "" and gender_of("", known) == ""
+    she = lambda s: fit_speaker(s, "female")
+    assert she("ยังลุกได้ไหมครับ?") == "ยังลุกได้ไหมคะ?"
+    assert she("ไม่ครับ นี่มัน……") == "ไม่ค่ะ นี่มัน……"
+    assert she("ระวังนะครับ!") == "ระวังนะคะ!" and she("ขอบคุณครับผม") == "ขอบคุณค่ะ"
+    assert she("คุณ Starborn ครับ ร่างกายเป็นอย่างไรบ้างครับ?") == "คุณ Starborn คะ ร่างกายเป็นอย่างไรบ้างคะ?"
+    assert she("แล้ว ผมสนใจเรื่องนี้") == "แล้ว ฉันสนใจเรื่องนี้" and she("ผมยาวสวยจัง") == "ผมยาวสวยจัง"
+    he = lambda s: fit_speaker(s, "male")
+    assert he("ได้คะแนนเยอะค่ะ") == "ได้คะแนนเยอะครับ" and he("จริงเหรอคะ?") == "จริงเหรอครับ?"
+    assert fit_speaker("ไปกันครับ", "") == "ไปกันครับ"  # nobody known: as translated

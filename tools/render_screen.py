@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from gamelens.api import LensClient  # noqa: E402
 from gamelens.overlay import Overlay  # noqa: E402
-from gamelens.profile import REMOTE, Profile, Settings  # noqa: E402
+from gamelens.profile import REMOTE, ROOT, Profile, Settings  # noqa: E402
 from gamelens.screen import lines_to_translate, paragraphs, requests, screen_items  # noqa: E402
 
 
@@ -32,7 +32,12 @@ def main():
     app = QApplication([])  # noqa: F841
     st = Settings.load()
     prof = Profile.load(st.resolve(st.profile))
-    engine = a.engine or prof.engine
+    if a.engine:
+        engine = a.engine
+    else:  # the profile's "local translator" is whichever model is picked for this computer
+        from gamelens.services import ServerManager
+
+        engine = ServerManager(ROOT, ROOT / "logs", st.resolve(st.models_dir), st.local_model).engine_for(prof.engine)
     api = LensClient(st.server, st.resolve(st.token_file))
     frame = cv2.imread(a.image)
     ocr = api.ocr_lines(frame, prof.src_lang, frame_h=frame.shape[0])
@@ -47,7 +52,7 @@ def main():
     print()
     for r in requests(groups, prof.src_lang):
         print(f"  {r['src']}\n    -> {res['lines'].get(r['id'], '')}")
-    items = screen_items(frame, groups, res["lines"], prof.font_scale)
+    items = screen_items(frame, groups, res["lines"], prof.font_scale, [l["bbox"] for l in ocr["lines"]])
     h, w = frame.shape[:2]
     ov = Overlay(prof.font_family)
     ov.client, ov.dpr = (0, 0, w, h), 1.0

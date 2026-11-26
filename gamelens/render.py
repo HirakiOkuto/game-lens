@@ -151,6 +151,20 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     if scene is not None:
         spread = 99.0 if scene else 0.0
     plain = spread < 30
+    if plain and scene is None:
+        # a background that changes along the line (a highlight's glow, a gradient): measured against the
+        # background right around each letter, the strokes the single colour missed are found too
+        k = max(3, int(1.2 * h)) | 1
+        local = cv2.medianBlur(frame[ey0:ey1, ex0:ex1], min(k, 255)).astype(np.int16)
+        near = np.abs(area - local).max(2)
+        top_near = float(np.percentile(near[y0 - ey0 : y1 - ey0, x0 - ex0 : x1 - ex0], 97))
+        found = near > max(24.0, 0.4 * top_near)
+        # the one colour took in the glow as well: much "ink" also in the middle of the line (not just the bands above
+        # and below a dark bar the box pokes out of)
+        mid = every[y0 - ey0 + h // 4 : y1 - ey0 - h // 4]
+        glow = mid.size and mid.mean() > 0.35 and found.mean() < 0.6 * every.mean()
+        if found.mean() < 0.4 and glow:
+            every = found  # (the text colour is still measured against the one background colour)
     if not plain:  # over a picture, a texture or the scene: no one background colour, look for strokes instead
         every, dist = _thin_strokes(frame[ey0:ey1, ex0:ex1], h, ink_kind)
         if strokes is not None:
@@ -183,9 +197,9 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
     gy = (ey0 + int(rows[0]), ey0 + int(rows[-1]) + 1) if len(rows) >= 2 else (y0, y1)
     if gy[1] - gy[0] < 0.35 * h:
         gy = (y0, y1)
-    if len(cols) >= 2:  # where the text really starts and ends (the given box may take in part of an icon)
-        x0, x1 = ex0 + int(cols[0]), ex0 + int(cols[-1]) + 1
-        w = x1 - x0
+    if len(cols) >= 2 and cols[-1] - cols[0] + 1 >= 0.25 * w:  # where the text really starts and ends (the given box
+        x0, x1 = ex0 + int(cols[0]), ex0 + int(cols[-1]) + 1  # may take in part of an icon); a much narrower find is
+        w = x1 - x0  # a piece of the text only (faint glyphs on a light panel), not where it ends
     if not ink.any():
         fg = 255 - bg
     else:  # the colour at the heart of the strokes: their soft edges are a blend with the background

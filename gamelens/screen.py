@@ -104,7 +104,8 @@ def place(line: Line, size: float) -> tuple[tuple[int, int, int, int], str]:
 
 def paragraphs(lines: list[dict]) -> list[list[dict]]:
     """Group lines that belong to one block of running text: stacked tightly (closer than rows of a list are),
-    the same size, and either starting at the same left edge or centred on the same middle."""
+    the same size, either starting at the same left edge or centred on the same middle, and the line above long
+    enough to have wrapped. Short labels stacked in a table or under an icon stay apart."""
     groups: list[list[dict]] = []
     for l in sorted(lines, key=lambda l: (l["bbox"][1], l["bbox"][0])):
         x, y, w, h = l["bbox"]
@@ -114,7 +115,8 @@ def paragraphs(lines: list[dict]) -> list[list[dict]]:
             same_size = abs(h - ph) <= 0.3 * max(h, ph)
             same_left = abs(x - g[0]["bbox"][0]) <= 0.6 * h
             same_middle = abs((x + w / 2) - (g[0]["bbox"][0] + g[0]["bbox"][2] / 2)) <= 0.6 * h
-            if -0.2 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle):
+            wrapped = len(plain_text(g[-1]["text"])) >= 8
+            if -0.2 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped:
                 g.append(l)
                 break
         else:
@@ -126,6 +128,42 @@ def requests(groups: list[list[dict]], src_lang: str = "ja") -> list[dict]:
     """What to send for translation: one entry per group, its lines joined (id = the first line's)."""
     sep = "" if (src_lang or "").lower().split("-")[0] in ("ja", "zh") else " "
     return [{"id": g[0]["id"], "src": sep.join(l["text"] for l in g), "kind": "ui"} for g in groups]
+
+
+THAI_MARKS = set(chr(c) for c in [0x0E31, *range(0x0E34, 0x0E3B), *range(0x0E47, 0x0E4F)])  # above / below a letter
+
+
+def room_for(rect, align: str, text: str, size: float, frame_w: int, own=None, others=(), look: Line | None = None):
+    """A label's translation on one line where it fits on one line at its size: a box squeezed between icons would
+    otherwise break it letter by letter. Widened around its middle (or from its start), within the picture, but
+    never over other text of the screen (`others`: boxes of every line read, `own` among them) - there the font
+    gets smaller instead, nor off the plain panel or button it is on. A left-aligned label (a table's) only grows
+    to the right, a right-aligned one to the left; a centred one (under an icon) on both sides."""
+    x, y, w, h = rect
+    need = int(0.55 * size * sum(c not in THAI_MARKS for c in text)) + 6
+    if w >= need:
+        return rect
+    lo, hi = 0, frame_w
+    if look is not None and look.calm:  # on a panel or a button: stay on its own background
+        lo, hi = look.box[0] - look.free_left, look.box[0] + look.box[2] + look.free_right
+    ox = own[0] + own[2] / 2 if own else x + w / 2
+    for b in others:
+        if b is own or b[1] >= y + h or b[1] + b[3] <= y:
+            continue  # another row
+        if b[0] + b[2] <= ox:
+            lo = max(lo, b[0] + b[2] + 4)
+        elif b[0] >= ox:
+            hi = min(hi, b[0] - 4)
+    if align == "left":
+        lo = x
+    elif align == "right":
+        hi = x + w
+    new = min(need, max(3 * w, 220), hi - lo)
+    if new <= w:
+        return rect
+    nx = x + (w - new) // 2 if align == "center" else x - (new - w) if align == "right" else x
+    nx = int(max(lo, min(nx, hi - new)))
+    return (nx, y, int(new), h)
 
 
 def place_block(looks: list[Line], size: float) -> tuple[tuple[int, int, int, int], str]:
@@ -147,29 +185,33 @@ def place_block(looks: list[Line], size: float) -> tuple[tuple[int, int, int, in
     return (x0, y, (x1 - x0) + max(0, widest.free_right - 4), tall), "left"
 
 
-def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict[str, str], font_scale: float) -> list[Item]:
-    """Overlay items for the groups (see `paragraphs`) that got a translation. Text without one is left untouched."""
+def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict[str, str], font_scale: float,
+                 others: list | None = None) -> list[Item]:
+    """Overlay items for the groups (see `paragraphs`) that got a translation. Text without one is left untouched.
+    others: boxes of every line on the screen (numbers too), which a widened translation must not cover."""
+    others = others if others is not None else [l["bbox"] for g in groups for l in g]
     done = []
     for g in groups:
         tl = translations.get(g[0]["id"], "").strip()
         looks = [a for l in g if (a := analyze_line(frame, l["bbox"])) is not None]
         if tl and looks:
-            done.append((tl, looks))
+            done.append((tl, looks, g[0]["bbox"]))
     if not done:
         return []
-    heights = common_heights([sorted(a.glyph_h for a in looks)[len(looks) // 2] for _, looks in done])
+    heights = common_heights([sorted(a.glyph_h for a in looks)[len(looks) // 2] for _, looks, _ in done])
     items = []
-    for (tl, looks), gh in zip(done, heights):
+    for (tl, looks, own), gh in zip(done, heights):
         size = max(11.0, gh * SIZE_FACTOR * font_scale)
         a = looks[0]
         if len(looks) == 1:
             rect, align = place(a, size)
+            rect = room_for(rect, align, tl, size, frame.shape[1], own, others, a)
         else:
             rect, align = place_block(looks, size)
         items.append(Item(rect=rect, text=tl, fg=a.fg, outline=outline_for(a.fg, a.bg, all(k.calm for k in looks)),
                           max_px=size, align=align, vcenter=len(looks) == 1))
         items[-1]._boxes = [k.box for k in looks]  # where the original text is (to notice when it changes)
-    patch = erase_lines(frame, [a for _, looks in done for a in looks])
+    patch = erase_lines(frame, [a for _, looks, _ in done for a in looks])
     if patch is not None:
         items[0].patch, items[0].patch_pos = to_qimage(patch), (0, 0)
     return items

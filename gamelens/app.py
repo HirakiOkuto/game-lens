@@ -843,7 +843,7 @@ class Controller(QObject):
             res = self.api.translate_lines(requests(groups, p.src_lang), series=p.series, target=p.target,
                                            src_lang=p.src_lang, engine=p.live_engine or p.engine, allow_cloud=p.engine in REMOTE,
                                            context=[])
-            items = screen_items(frame, groups, res["lines"], p.font_scale)
+            items = screen_items(frame, groups, res["lines"], p.font_scale, [l["bbox"] for l in ocr["lines"]])
             log.info("screen: %d translated by %s", len(items), res.get("engine"))
             self.bridge.screen_done.emit(gen, items if items or not auto else None)
         except Exception as e:  # noqa: BLE001

@@ -443,8 +443,13 @@ def test_paragraphs_join_running_text_but_not_list_rows():
     block = next(r for r in req if r["id"] == "p0")
     assert block["src"] == "また、桃の花が咲く季節が来たね最近みんなはどんな悩みを抱えているのかな？"
     # two centred subtitle lines of different lengths are one block too
-    centred = paragraphs([{"id": "a", "bbox": [300, 500, 400, 24], "text": "x"}, {"id": "b", "bbox": [200, 532, 600, 24], "text": "y"}])
+    centred = paragraphs([{"id": "a", "bbox": [300, 500, 400, 24], "text": "ステータスはここでチェック！"},
+                          {"id": "b", "bbox": [200, 532, 600, 24], "text": "みんな唯一無二の能力を持ってるのだ。"}])
     assert [len(g) for g in centred] == [2]
+    # labels of a table, stacked as tightly as running text, stay apart (天性 over 愉快·優良, 攻撃 over ブレイク値)
+    table = paragraphs([{"id": "a", "bbox": [670, 523, 24, 13], "text": "攻撃"}, {"id": "b", "bbox": [670, 545, 59, 13], "text": "ブレイク値"},
+                        {"id": "c", "bbox": [670, 567, 39, 14], "text": "EX強度"}])
+    assert [len(g) for g in table] == [1, 1, 1]
 
     img = np.full((420, 600, 3), (238, 233, 228), np.uint8)
     for i, w in enumerate((380, 340, 300)):

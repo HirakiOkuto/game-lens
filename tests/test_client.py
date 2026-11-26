@@ -493,6 +493,13 @@ def test_paragraphs_join_running_text_but_not_list_rows():
     table = paragraphs([{"id": "a", "bbox": [670, 523, 24, 13], "text": "攻撃"}, {"id": "b", "bbox": [670, 545, 59, 13], "text": "ブレイク値"},
                         {"id": "c", "bbox": [670, 567, 39, 14], "text": "EX強度"}])
     assert [len(g) for g in table] == [1, 1, 1]
+    # a card's text set so tightly that the reader's boxes overlap and come out in different heights (Kibo factors)
+    card = paragraphs([{"id": "a", "bbox": [387, 489, 129, 13], "text": "エネミーがブレイクした"},
+                       {"id": "c", "bbox": [387, 514, 80, 15], "text": "75%增加する。"},
+                       {"id": "b", "bbox": [387, 498, 135, 19], "text": "時、自身のEXダメージが"},
+                       {"id": "d", "bbox": [575, 496, 141, 15], "text": "自身の攻撃力が4%上昇し、"},
+                       {"id": "e", "bbox": [575, 507, 102, 15], "text": "HPが1%増加する。"}])
+    assert [[l["id"] for l in g] for g in card] == [["a", "b", "c"], ["d", "e"]]
 
     img = np.full((420, 600, 3), (238, 233, 228), np.uint8)
     for i, w in enumerate((380, 340, 300)):

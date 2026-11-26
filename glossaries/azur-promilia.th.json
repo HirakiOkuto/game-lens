@@ -42,6 +42,7 @@
     {"src": "フリス", "reading": "", "tl": "Fleece", "note": "place", "source": "official"},
     {"src": "レーブ", "reading": "", "tl": "Lebe", "note": "place", "source": "official"},
     {"src": "マウント", "reading": "", "tl": "พาหนะ", "note": "a Kibo the player rides (menus)", "source": "translation"},
-    {"src": "葉野菜", "reading": "", "tl": "ผักใบ", "note": "leafy vegetable", "source": "translation"}
+    {"src": "葉野菜", "reading": "", "tl": "ผักใบ", "note": "leafy vegetable", "source": "translation"},
+    {"src": "天性", "reading": "", "tl": "นิสัย", "note": "a Kibo's nature (a short tag)", "source": "translation"}
   ]
 }

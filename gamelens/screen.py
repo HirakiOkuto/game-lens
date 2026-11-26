@@ -118,11 +118,12 @@ def paragraphs(lines: list[dict]) -> list[list[dict]]:
         for g in groups:
             px, py, pw, ph = g[-1]["bbox"]
             gap = y - (py + ph)
-            same_size = abs(h - ph) <= 0.3 * max(h, ph)
+            same_size = abs(h - ph) <= 0.35 * max(h, ph)
             same_left = abs(x - g[0]["bbox"][0]) <= 0.6 * h
             same_middle = abs((x + w / 2) - (g[0]["bbox"][0] + g[0]["bbox"][2] / 2)) <= 0.6 * h
             wrapped = len(plain_text(g[-1]["text"])) >= 8
-            if -0.2 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped:
+            # (lines set tightly have boxes that overlap: the reader's boxes reach above and below the letters)
+            if -0.45 * h <= gap <= 0.75 * h and same_size and (same_left or same_middle) and wrapped:
                 g.append(l)
                 break
         else:

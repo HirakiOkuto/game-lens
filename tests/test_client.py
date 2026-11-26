@@ -1143,3 +1143,15 @@ def test_new_text_is_told_from_a_screen_that_moves_by_itself():
         g[50:90] = rng.random((40, 160)) < 0.2
         vals.append(st.feed(g))
     assert vals[-1] > 0.5
+
+
+def test_letters_at_the_end_of_a_line_on_a_gradient_are_found():
+    """News list items on a panel whose shade changes along the line: the first, dense letters (絆心) lie on the
+    lighter end. They are found (and so erased), not taken for a patch of background running out of the area."""
+    from gamelens.render import analyze_line
+
+    img = cv2.imread(str(Path(__file__).parent / "data" / "news_list.png"))  # from Azur Promilia's news
+    a = analyze_line(img, [47, 18, 184, 18])  # 絆心の観測「花霞を胸に」
+    assert a.box[0] <= 49  # starts where the line starts, not after 絆心
+    x0 = a.mask_box[0]
+    assert (a.mask[:, 47 - x0 : 80 - x0] > 0).sum() > 120  # 絆心 is covered

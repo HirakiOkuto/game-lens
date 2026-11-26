@@ -142,17 +142,18 @@ def paragraphs(lines: list[dict], frame: np.ndarray | None = None) -> list[list[
     the same size, either starting at the same left edge or centred on the same middle, and the line above long
     enough to have wrapped. Short labels stacked in a table or under an icon stay apart. With the picture given,
     lines of quite another colour stay apart too (a quest's yellow title over its white objective)."""
-    colour: dict[int, np.ndarray | None] = {}
+    colour: dict[int, tuple] = {}
 
     def ink(l):
         if id(l) not in colour:
             a = analyze_line(frame, l["bbox"]) if frame is not None else None
-            colour[id(l)] = np.array([int(a.fg[i : i + 2], 16) for i in (1, 3, 5)]) if a else None
+            colour[id(l)] = (np.array([int(a.fg[i : i + 2], 16) for i in (1, 3, 5)]), a.calm) if a else (None, True)
         return colour[id(l)]
 
     def same_ink(a, b):
-        ca, cb = ink(a), ink(b)
-        return ca is None or cb is None or int(np.abs(ca - cb).max()) <= 70
+        (ca, calm_a), (cb, calm_b) = ink(a), ink(b)
+        # (over the moving world lines are hints, one after another, not a paragraph wrapped on a panel)
+        return (ca is None or cb is None or int(np.abs(ca - cb).max()) <= 70) and calm_a and calm_b
 
     groups: list[list[dict]] = []
     for l in sorted(lines, key=lambda l: (l["bbox"][1], l["bbox"][0])):

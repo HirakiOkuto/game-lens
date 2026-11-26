@@ -64,6 +64,7 @@ class Bridge(QObject):
     region_done = Signal(str, object, object)
     screen_done = Signal(int, object)
     screen_part = Signal(int, object)  # the translations of a screen that are done so far
+    screen_more = Signal(int, object)  # a look at a translated screen found text it did not have
     message = Signal(str, str)
     status = Signal(dict)
     server_state = Signal(str, str)
@@ -167,6 +168,7 @@ class Controller(QObject):
         self.bridge.region_done.connect(self.on_region_done)
         self.bridge.screen_done.connect(self.on_screen_done)
         self.bridge.screen_part.connect(self.on_screen_part)
+        self.bridge.screen_more.connect(self.on_screen_more)
         self.bridge.message.connect(self._tray_message)
         self.bridge.status.connect(self.on_status)
         self.bridge.server_state.connect(lambda s, d: self.refresh_panel())
@@ -203,6 +205,8 @@ class Controller(QObject):
         self.screen_tiles = None
         self.screen_quiet = 0.0
         self.screen_count = 0  # lines of the screen being read (known once its text is read): many = a menu
+        self.screen_read: list[str] = []  # the text that reading found
+        self.recheck_at, self.rechecking = 0.0, False
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
         self.screen_texts: frozenset = frozenset()  # what the last screen translation said
@@ -1037,6 +1041,9 @@ class Controller(QObject):
             ocr = self.api.ocr_lines(frame, p.src_lang, frame_h=frame.shape[0])
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
+            if gen == self.screen_gen:
+                self.screen_read = [l["text"] for l in lines]
+                self.recheck_at = time.monotonic() + 3
             if not lines:
                 self.bridge.screen_done.emit(gen, None if auto else [])
                 return
@@ -1150,7 +1157,8 @@ class Controller(QObject):
         if self.screen_marks:
             state = text_state(frame, self.screen_marks)
             strokes = stroke_map(frame, "any")
-            last, self.screen_last = self.screen_last, strokes
+            thumb = thumbnail(frame)
+            last, self.screen_last = self.screen_last, thumb
             # text the translation does not cover appeared (a pop-up, another tab): its strokes differ from the
             # picture that was read, in the parts of the screen that stand still (not grass waving, water, a Kibo)
             new_text = self.screen_tiles.feed(strokes) > 0.5 and time.monotonic() > self.screen_quiet  # (pop-ups: ~0.9)
@@ -1159,14 +1167,22 @@ class Controller(QObject):
                 self.auto_done = None
             elif state == "changed" or new_text:
                 self.drop_changed_items(frame)  # (a pop-up over them: at once, not after it has opened)
-                if last is None or stroke_change(last, strokes) > STILL:
-                    return  # still moving (a pop-up opening): wait until it stands
+                # still moving (a pop-up opening): wait until it stands. (The picture as a whole: grass waving behind
+                # the menu changes it by about 1 from one look to the next, an opening pop-up by much more)
+                if last is None or float(np.abs(thumb - last).mean()) > 4:
+                    return
                 # read the screen again; the translations of text that is still there stay up meanwhile
                 auto, menu = self.screen_auto, self.screen_menu
                 self.screen_gen += 1
                 self.screen_ref, self.screen_marks = None, []
                 self.screen_menu = menu
                 self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
+            elif not self.screen_busy and not self.rechecking and time.monotonic() > self.recheck_at:
+                # small new text (a panel's "no items", a label that appears) changes too little of the screen to be
+                # seen in its strokes: every few seconds the screen is read again, which on the graphics card is
+                # quick, and only text it did not have before counts
+                self.rechecking, self.recheck_at = True, time.monotonic() + 3
+                self.pool.submit(self.job_recheck, frame.copy(), self.screen_gen)
             return
         # still being read: only a quite different screen counts (its text, not a background that moves). The
         # reading is given up then, and the screen is not "handled": auto mode reads what is there once it is still
@@ -1175,6 +1191,33 @@ class Controller(QObject):
         if float(np.abs(thumbnail(frame) - self.screen_thumb).mean()) > 22:
             self.dismiss_screen()
             self.auto_done = None
+
+    def job_recheck(self, frame: np.ndarray, gen: int):
+        try:
+            p = self.profile
+            ocr = self.api.ocr_lines(frame, p.src_lang, frame_h=frame.shape[0])
+            lines = lines_to_translate(ocr["lines"], [], p.src_lang)
+            new = [l["text"] for l in lines
+                   if len(l["text"]) >= 2 and not any(similar(l["text"], t) >= 0.75 for t in self.screen_read)]
+            if new:
+                self.bridge.screen_more.emit(gen, new)
+        except Exception as e:  # noqa: BLE001 - only a look: the next one comes
+            log.info("screen look: %s", e)
+        finally:
+            self.rechecking = False
+
+    def on_screen_more(self, gen: int, new: list):
+        if gen != self.screen_gen or self.screen_ref is None or self.screen_busy or not self.cap:
+            return
+        frame, _ = self.cap.client_frame()
+        if frame is None:
+            return
+        log.info("screen: new text %s", new[:3])
+        auto, menu = self.screen_auto, self.screen_menu
+        self.screen_gen += 1
+        self.screen_ref, self.screen_marks = None, []
+        self.screen_menu = menu
+        self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
 
     def drop_changed_items(self, frame: np.ndarray):
         """Take away the screen translations whose original text changed or is covered now (a pop-up, another tab),

@@ -195,8 +195,24 @@ def analyze_line(frame: np.ndarray, bbox, strokes: np.ndarray | None = None, ink
                 # a tag fill their columns too, but all along the line)
                 runs = np.diff(np.concatenate([[0], solid.astype(np.int8), [0]]))
                 longest = (np.flatnonzero(runs == -1) - np.flatnonzero(runs == 1)).max(initial=0)
-                if longest >= 2 * h and solid.mean() <= 0.6:
+                # (and it is a background: it fills the margin above and below the line there too. Dense bold
+                # letters - 絆心, 報酬 - fill their columns' middle as well, but not the margin)
+                margin = np.concatenate([every[: y0 - ey0], every[y1 - ey0 :]])
+                beyond = margin.size and margin[:, solid].mean() > 0.6 if solid.any() else False
+                if longest >= 2 * h and solid.mean() <= 0.6 and beyond:
                     every[:, solid] = found[:, solid]
+            # one end of the line lies on a lighter or darker patch (a panel's gradient, a highlight): there the
+            # one colour marks the patch from top to bottom, the letters over it drown in one shape that runs out of
+            # the area and is taken for something else (絆心, 報酬 were neither erased nor measured). Over such a
+            # patch the letters found against what is right around them count instead
+            n_, lab_, st_, _ = cv2.connectedComponentsWithStats(every.astype(np.uint8), connectivity=8)
+            AH_, AW_ = every.shape
+            for i in range(1, n_):
+                cx, cy, cw, ch = st_[i, 0], st_[i, 1], st_[i, 2], st_[i, 3]
+                at_end = (cx == 0 and ex0 > 0) or (cx + cw == AW_ and ex1 < W)
+                if at_end and ch >= 0.9 * AH_ and cw >= 0.5 * h and cw <= 0.6 * AW_:
+                    cols = slice(cx, cx + cw)
+                    every[:, cols] = found[:, cols]
     on_scene = False
     if scene is None:
         # light game text with its soft shadow straight over the 3D scene (a hint, a quest): the scene is light

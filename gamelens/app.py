@@ -192,6 +192,8 @@ class Controller(QObject):
         self.screen_ref: np.ndarray | None = None
         self.screen_frame: np.ndarray | None = None
         self.screen_marks: list = []  # what the translated text looked like (see text_state)
+        self.screen_strokes = self.screen_last = None
+        self.screen_quiet = 0.0
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
         self.screen_texts: frozenset = frozenset()  # what the last screen translation said
@@ -878,6 +880,7 @@ class Controller(QObject):
         self.screen_gen += 1
         self.screen_ref = ref
         self.screen_frame, self.screen_marks = frame, []
+        self.screen_strokes, self.screen_last = stroke_map(frame, "any"), None  # to notice text that appears later
         self.auto_done = stroke_map(frame, "any")  # this text is handled: auto mode will not start on it again
         self.overlay.set_pending("screen", (frame.shape[1] // 2 + 21, 60))
         if not auto:
@@ -956,6 +959,8 @@ class Controller(QObject):
         # nothing found, or the same labels as the last time (the HUD while walking): wait longer before trying again
         texts = frozenset(it.text for it in items) if isinstance(items, list) else frozenset()
         same = bool(texts) and texts == self.screen_texts and self.screen_auto
+        # read again for nothing (the screen only shimmered): do not let that happen every second
+        self.screen_quiet = time.monotonic() + 8 if texts and texts == self.screen_texts else 0.0
         self.screen_texts = texts or self.screen_texts
         self.auto_empties = 0 if items and not same else self.auto_empties + 1
         if items is None:  # auto mode found nothing to translate: stay quiet
@@ -980,12 +985,22 @@ class Controller(QObject):
             return
         if self.screen_marks:
             state = text_state(frame, self.screen_marks)
-            if state == "changed":  # the same screen with some other text (the next tip): translate it again now;
-                self.screen_marks = []  # what is shown stays until the new translation replaces it
-                self.start_screen(frame, ink_map(frame, "any"), auto=self.screen_auto, regions=not self.screen_menu)
-            elif state == "gone":  # another page, a closed menu
+            strokes = stroke_map(frame, "any")
+            last, self.screen_last = self.screen_last, strokes
+            # text the translation does not cover appeared (a pop-up, another tab): its strokes differ from the
+            # picture that was read, tile by tile, though the screen itself has come to rest
+            new_text = stroke_change(self.screen_strokes, strokes) > STILL and time.monotonic() > self.screen_quiet
+            if state == "gone":  # another page, a closed menu
                 self.dismiss_screen()
                 self.auto_done = None
+            elif state == "changed" or new_text:
+                if last is None or stroke_change(last, strokes) > STILL:
+                    return  # still moving (a pop-up opening): wait until it stands
+                # read the screen again; what is shown now may lie over other text, so it goes first
+                auto, menu = self.screen_auto, self.screen_menu
+                self.dismiss_screen()
+                self.screen_menu = menu
+                self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
             return
         now_map = ink_map(frame, "any")  # still being read: only a quite different screen counts
         if changed_pixels(self.screen_ref, now_map) > 0.25 * now_map.size:

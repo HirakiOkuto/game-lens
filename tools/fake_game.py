@@ -18,6 +18,7 @@ LINES = [
 
 MENU = ["装備", "スキル", "編成", "ショップ", "設定"]
 QUEST = ["メインクエスト", "港の倉庫で指揮官を探す", "報酬：ダイヤ 50個"]
+POPUP = ["ステータス", "会心ダメージ　150.0%", "回復効果増加　0.0%", "火属性ダメージ増幅　0.0%"]
 
 
 class FakeGame(QWidget):
@@ -27,6 +28,9 @@ class FakeGame(QWidget):
         self.resize(1280, 720)
         self.i, self.shown, self.t = 0, 0, 0.0
         self.menu = "--menu" in sys.argv
+        self.popup = False  # P toggles a pop-up over the menu (--popup N: opens it after N seconds)
+        if "--popup" in sys.argv:
+            QTimer.singleShot(int(float(sys.argv[sys.argv.index("--popup") + 1]) * 1000), self.toggle_popup)
         QTimer(self, interval=33, timeout=self.step).start()
         if "--auto" in sys.argv:  # advance by itself every N seconds (for unattended tests)
             secs = float(sys.argv[sys.argv.index("--auto") + 1])
@@ -48,6 +52,12 @@ class FakeGame(QWidget):
             self.next()
         elif e.key() == Qt.Key.Key_M:
             self.menu = not self.menu
+        elif e.key() == Qt.Key.Key_P:
+            self.toggle_popup()
+
+    def toggle_popup(self):
+        self.popup = not self.popup
+        self.update()
 
     def mousePressEvent(self, _):
         self.next()
@@ -72,6 +82,16 @@ class FakeGame(QWidget):
             p.setPen(QColor("#2a2a35"))
             p.drawText(QRectF(panel.x() + 28, panel.y() + 24 + i * h * 0.085, panel.width() - 40, h * 0.07),
                        Qt.AlignmentFlag.AlignVCenter, t)
+        if self.popup:
+            box = QRectF(w * 0.2, h * 0.3, w * 0.5, h * 0.45)
+            p.fillRect(box, QColor(245, 245, 240))
+            for i, t in enumerate(POPUP):
+                f.setBold(i == 0)
+                f.setPixelSize(int(h * 0.036))
+                p.setFont(f)
+                p.setPen(QColor("#30303a"))
+                p.drawText(QRectF(box.x() + 30, box.y() + 20 + i * h * 0.09, box.width() - 50, h * 0.07),
+                           Qt.AlignmentFlag.AlignVCenter, t)
 
     def paintEvent(self, _):
         p = QPainter(self)

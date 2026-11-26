@@ -33,8 +33,9 @@ if (Get-Command llama -ErrorAction SilentlyContinue) {
     Write-Host "  (ไม่ติดตั้งก็ได้ ถ้าจะใช้ Google / DeepL / Azure แทน)"
 }
 
-Step "4/4 โมเดลแปล"
-Write-Host "game-lens ดาวน์โหลดเองตอนเปิดครั้งแรก: Index-Translate 9B (5.8 GB) ถ้าการ์ดจอมี 10 GB ขึ้นไป ไม่อย่างนั้น Hy-MT2 1.8B (1.1 GB)"
+Step "4/4 โมเดล"
+Write-Host "game-lens ดาวน์โหลดเองเมื่อเปิดใช้ครั้งแรก: ตัวอ่านข้อความ (~87 MB) และโมเดลแปลภาษา"
+Write-Host "Index-Translate 9B (5.8 GB) หากการ์ดจอมี 10 GB ขึ้นไป หรือ Hy-MT2 1.8B (1.1 GB)"
 
 Write-Host ""
 Write-Host "ติดตั้งเสร็จ — เปิดโปรแกรมด้วย start.bat แล้วกดปุ่ม 'สร้างไอคอนบน Desktop'" -ForegroundColor Green

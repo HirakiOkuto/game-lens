@@ -35,7 +35,7 @@ def main():
                 data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
             dst.writestr("game-lens/" + name, data)
         dst.writestr("game-lens/models/วางไฟล์โมเดล .gguf ไว้ที่นี่.txt",
-                     "setup.bat ดาวน์โหลด Hy-MT2-7B-Q4_K_M.gguf มาไว้ที่นี่ให้เอง\r\n".encode("utf-8"))
+                     "game-lens ดาวน์โหลดโมเดลแปลภาษามาไว้ที่นี่เองเมื่อเปิดใช้ครั้งแรก\r\n".encode("utf-8"))
     names = zipfile.ZipFile(out).namelist()
     bad = [n for n in names if any(k in n for k in ("token", "keys.json", ".sqlite", ".venv/", "logs/"))]
     assert not bad, bad

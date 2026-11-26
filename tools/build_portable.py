@@ -124,7 +124,7 @@ def build_app() -> None:
             t.write_bytes(data)
     (OUT / "models").mkdir(exist_ok=True)
     (OUT / "models" / "วางไฟล์โมเดล .gguf ไว้ที่นี่.txt").write_text(
-        "game-lens ดาวน์โหลด Hy-MT2-7B-Q4_K_M.gguf มาไว้ที่นี่เองตอนเปิดครั้งแรก\r\n", encoding="utf-8")
+        "game-lens ดาวน์โหลดโมเดลแปลภาษามาไว้ที่นี่เองเมื่อเปิดใช้ครั้งแรก\r\n", encoding="utf-8")
 
 
 def build_python() -> None:
@@ -158,13 +158,14 @@ def build_launcher(icon: Path | None) -> None:
 
 def readme() -> None:
     (OUT / "อ่านก่อน.txt").write_text(
-        "game-lens (portable) — แปลเกมญี่ปุ่นเป็นไทยทับข้อความในเกม\r\n\r\n"
-        "1. แตกไฟล์ zip ไว้ในโฟลเดอร์ที่เขียนไฟล์ได้ เช่น D:\\game-lens (อย่าไว้ใน Program Files)\r\n"
+        "game-lens (portable) — แปลข้อความในเกมเป็นภาษาไทย แสดงทับบนหน้าจอเกม\r\n\r\n"
+        "1. แตกไฟล์ zip ไว้ในโฟลเดอร์ที่เขียนไฟล์ได้ เช่น D:\\game-lens (ไม่ควรไว้ใน Program Files)\r\n"
         "2. ดับเบิลคลิก game-lens.exe\r\n"
-        "   ครั้งแรกจะดาวน์โหลดโมเดลแปล 4.6 GB เอง (ดูความคืบหน้าในหน้าต่าง game-lens)\r\n"
-        "   ถ้า Windows ขึ้น 'Windows protected your PC' ให้กด More info > Run anyway (โปรแกรมไม่ได้เซ็นชื่อ)\r\n"
-        "3. ตั้งเกมเป็น Borderless หรือ Windowed แล้วทำตาม 3 ขั้นในหน้าต่าง game-lens\r\n\r\n"
-        "โมเดลในเครื่องควรมีการ์ดจอที่ว่างราว 6 GB ถ้าไม่มี เลือกเครื่องแปล Google / DeepL / Azure ในหน้าต่าง game-lens\r\n"
+        "   หาก Windows แสดง 'Windows protected your PC' ให้กด More info แล้วกด Run anyway (โปรแกรมไม่ได้ลงลายเซ็นดิจิทัล)\r\n"
+        "   ครั้งแรกโปรแกรมจะดาวน์โหลดตัวอ่านข้อความ (~87 MB) และโมเดลแปลภาษา (1.1-5.8 GB ตามการ์ดจอ) เอง\r\n"
+        "   โดยแสดงความคืบหน้าในหน้าต่าง game-lens\r\n"
+        "3. ตั้งเกมเป็นแบบ Borderless หรือ Windowed แล้วดำเนินการตาม 3 ขั้นตอนในหน้าต่าง game-lens\r\n\r\n"
+        "หน้าต่างของโปรแกรมเปลี่ยนเป็นภาษาไทยได้ที่มุมขวาบน (🌐)\r\n"
         "รายละเอียดทั้งหมดอยู่ใน README.md\r\n", encoding="utf-8")
 
 

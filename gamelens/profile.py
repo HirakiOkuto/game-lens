@@ -15,26 +15,17 @@ KIND_LABELS = {"dialog": "บทพูด (กล่องข้อความ)
                "choice": "ตัวเลือกคำตอบ"}
 # engines the server knows, in the order the user sees them; remote ones send text off this machine
 ENGINE_INFO = [
-    {"key": "hymt", "name": "โมเดลแปลในเครื่อง (แนะนำ)",
-     "desc": "ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง: Index-Translate 9B (การ์ดจอ 10 GB ขึ้นไป) "
-             "หรือ Hy-MT2 1.8B", "keys": []},
-    {"key": "local", "name": "Gemma 26B — ในเครื่อง",
-     "desc": "แปลสวยที่สุดในเครื่อง เข้าใจบริบท • ใช้การ์ดจอมาก อาจทำให้เกมกระตุก", "keys": []},
-    {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร",
-     "desc": "ไม่ใช้การ์ดจอ • ช่องทางเดียวกับ LunaTranslator (ไม่เป็นทางการ Google เปลี่ยนหรือจำกัดได้ทุกเมื่อ)", "keys": []},
-    {"key": "deepl", "name": "DeepL",
-     "desc": "ฟรี 500,000 ตัวอักษร/เดือน (สมัคร DeepL API Free) • ไม่ใช้การ์ดจอ",
+    {"key": "hymt", "name": "โมเดลแปลในเครื่อง (แนะนำ)", "desc": "ฟรี ไม่ต้องใช้เน็ต • เลือกรุ่นตามการ์ดจอให้เอง", "keys": []},
+    {"key": "google_free", "name": "Google — ฟรี ไม่ต้องสมัคร", "desc": "ฟรี • ไม่ใช้การ์ดจอ", "keys": []},
+    {"key": "deepl", "name": "DeepL", "desc": "ฟรี 500,000 ตัวอักษร/เดือน • ต้องสมัคร",
      "keys": [("DEEPL_API_KEY", "API key")], "signup": "https://www.deepl.com/pro-api"},
-    {"key": "azure", "name": "Microsoft Azure",
-     "desc": "ฟรี 2,000,000 ตัวอักษร/เดือน (แผน F0) • ไม่ใช้การ์ดจอ",
+    {"key": "azure", "name": "Microsoft Azure", "desc": "ฟรี 2,000,000 ตัวอักษร/เดือน • ต้องสมัคร",
      "keys": [("AZURE_TRANSLATOR_KEY", "Key"), ("AZURE_TRANSLATOR_REGION", "Region (เช่น southeastasia)")],
      "signup": "https://portal.azure.com/#create/Microsoft.CognitiveServicesTextTranslation"},
-    {"key": "google", "name": "Google Cloud",
-     "desc": "ฟรี 500,000 ตัวอักษร/เดือน • ไม่ใช้การ์ดจอ",
+    {"key": "google", "name": "Google Cloud", "desc": "ฟรี 500,000 ตัวอักษร/เดือน • ต้องสมัคร",
      "keys": [("GOOGLE_TRANSLATE_API_KEY", "API key")],
      "signup": "https://console.cloud.google.com/apis/library/translate.googleapis.com"},
-    {"key": "cloud", "name": "Claude",
-     "desc": "แปลสวยและเข้าใจบริบทมาก • คิดเงินตามการใช้งาน",
+    {"key": "cloud", "name": "Claude", "desc": "แปลสวยที่สุด • คิดเงินตามการใช้",
      "keys": [("ANTHROPIC_API_KEY", "API key")], "signup": "https://console.anthropic.com/"},
 ]
 ENGINE_BY_KEY = {e["key"]: e for e in ENGINE_INFO}

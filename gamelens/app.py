@@ -149,6 +149,9 @@ class Controller(QObject):
             self.profile.engine, self.settings.local_model = "hymt", "index"
             self.profile.save()
             self.settings.save()
+        if self.profile.engine not in ENGINE_BY_KEY:  # an engine no longer offered (Gemma): the local translator
+            self.profile.engine = "hymt"
+            self.profile.save()
         self.services = ServerManager(ROOT, ROOT / "logs", self.settings.resolve(self.settings.models_dir),
                                       self.settings.local_model)
         self.profile.live_engine = self.services.engine_for(self.profile.engine)
@@ -527,6 +530,8 @@ class Controller(QObject):
         """Another game: its own regions, language and names. Remembered as the game to open next time."""
         self.detach()
         self.profile = Profile.load(path)
+        if self.profile.engine not in ENGINE_BY_KEY:
+            self.profile.engine = "hymt"
         self.profile.live_engine = self.services.engine_for(self.profile.engine)
         if not os.environ.get("GAMELENS_PROFILE"):
             try:

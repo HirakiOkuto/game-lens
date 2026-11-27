@@ -1569,3 +1569,53 @@ def test_erasing_text_on_a_gradient_panel_keeps_the_gradient():
     sel = hole > 0
     err = lambda out: float(np.abs(out.astype(np.float32)[sel] - panel.astype(np.float32)[sel]).mean())  # noqa: E731
     assert err(harmonic_fill(panel, hole)) < 0.6 * err(_cv2.inpaint(panel, hole, 3, _cv2.INPAINT_TELEA))
+
+
+def _glyph_line(frame, core, h, bg):
+    """A Line for erase_lines whose glyph mask is `core` (a mask over the whole frame) - as analyze_line would give
+    for letters whose soft halo it missed."""
+    from gamelens.render import Line
+
+    H, W = frame.shape[:2]
+    return Line(box=(0, 0, W, h), fg="#ffffff", bg=bg, plain=False, calm=False, glyph_y=(0, H), free_left=0,
+                free_right=0, mask=core, mask_box=(0, 0, W, H))
+
+
+def _composite(frame, patch):
+    a = patch[..., 3:4] / 255.0
+    return (frame * (1 - a) + patch[..., :3] * a).astype(np.uint8)
+
+
+def _letters(bg, pill=None, y0=12):
+    """White strokes over bg (on a pill of colour `pill` hugging them, if given), and a glyph mask a pixel short of
+    them all round - the rim it misses stays on as the shape of the words."""
+    frame = np.full((60, 220, 3), bg, np.uint8)
+    if pill is not None:
+        cv2.rectangle(frame, (30, y0), (190, 60 - y0), pill, -1)
+    strokes = np.zeros((60, 220), np.uint8)
+    for x in range(44, 176, 22):
+        cv2.rectangle(strokes, (x, 20), (x + 7, 40), 255, -1)
+    frame[strokes > 0] = 255
+    return frame, cv2.erode(strokes, np.ones((3, 3), np.uint8))
+
+
+def test_erase_widens_the_mask_when_the_letters_still_show():
+    """When the glyph mask missed part of the letters (their rim), what is left after the fill is measured
+    and the mask widened until the words are gone."""
+    from gamelens.render import erase_lines, leftover
+
+    frame, core = _letters((90, 70, 60))
+    out = _composite(frame, erase_lines(frame, [_glyph_line(frame, core, 30, "#3c465a")]))
+    assert leftover(frame, out, core) < 0.1
+    assert np.abs(out.astype(int) - (90, 70, 60)).max(axis=2)[10:50, 30:190].mean() < 12
+
+
+def test_erase_does_not_widen_past_a_tight_pill():
+    """...but not when the wider mask reaches past a pill hugging the letters: filled from round the pill, the
+    pill itself would go."""
+    from gamelens.render import erase_lines
+
+    pill = (176, 150, 135)
+    frame, core = _letters((222, 227, 222), pill, 17)
+    out = _composite(frame, erase_lines(frame, [_glyph_line(frame, core, 30, "#8796b0")]))
+    assert np.abs(out[core > 0].astype(int) - pill).max(axis=1).mean() < 30

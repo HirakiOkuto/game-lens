@@ -428,9 +428,28 @@ def inpaint(crop: np.ndarray, mask: np.ndarray, h: int, full: bool = False) -> n
     return cv2.resize(small, (W, H), interpolation=cv2.INTER_LINEAR)
 
 
+def leftover(before: np.ndarray, after: np.ndarray, mask: np.ndarray) -> float:
+    """Share of the glyphs' edges in before (where mask is) still standing in after: what is left of the words."""
+    near = cv2.dilate(mask, np.ones((3, 3), np.uint8)) > 0
+    e0 = (cv2.Canny(cv2.cvtColor(before, cv2.COLOR_BGR2GRAY), 40, 120) > 0) & near
+    if e0.sum() < 10:
+        return 0.0
+    e1 = cv2.Canny(cv2.cvtColor(after, cv2.COLOR_BGR2GRAY), 40, 120) > 0
+    return float((e1 & (cv2.dilate(e0.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)).sum() / e0.sum())
+
+
+GROW_AFTER = 0.25  # leftover above which a line's glyph mask is widened and filled again
+
+
 def erase_lines(frame: np.ndarray, lines: list[Line], full: bool = True) -> np.ndarray | None:
     """BGRA image the size of the frame: each line's glyphs painted over with their surroundings (inpainted line by
-    line), transparent everywhere else. full=False for the repaint every tick (see inpaint)."""
+    line), transparent everywhere else. full=False for the repaint every tick (see inpaint).
+
+    When the glyph mask misses too much (on 371 lines of our screenshots 3% kept over a quarter of their edges -
+    letters on a pill with a glow, an icon in the line, gold letters on grass) it is widened, a step at a time, and
+    filled again - as long as that brings the fill nearer the line's background colour, not away from it: on a tight
+    pill the wider mask soon reaches past the pill's edge, and the fill would paint the pill over with what is round
+    it (so would filling the whole box round the glyphs)."""
     lines = [l for l in lines if l is not None and l.mask.any()]
     if not lines:
         return None
@@ -450,6 +469,19 @@ def erase_lines(frame: np.ndarray, lines: list[Line], full: bool = True) -> np.n
             r = max(1, round(0.1 * l.box[3]))
             mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
         filled = inpaint(crop, mask, l.box[3], full)
+        if full:
+            glyphs = mask
+            bg = np.array([int(l.bg[i : i + 2], 16) for i in (5, 3, 1)], np.float32)  # (BGR)
+            off = lambda f: float(np.abs(f.astype(np.float32)[glyphs > 0].mean(0) - bg).max())  # noqa: E731
+            h = l.box[3]
+            for r in range(max(1, round(h / 24)), max(1, round(0.25 * h)) + 1, max(1, round(h / 24))):
+                if leftover(crop, filled, glyphs) <= GROW_AFTER:
+                    break
+                wider = cv2.dilate(glyphs, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+                again = inpaint(crop, wider, h, full)
+                if off(again) > off(filled) + 6:
+                    break
+                mask, filled = wider, again
         alpha = cv2.GaussianBlur(mask, (0, 0), 0.8)
         alpha[mask > 0] = 255
         dst = out[cy0:cy1, cx0:cx1]

@@ -29,7 +29,8 @@ OUT = ROOT / "build" / "game-lens"
 APP_LEAVE_OUT = ("tests/", "server/tests/", "tools/", "experiments/", "setup.ps1", "setup.bat", "start.ps1", "start.bat")
 PY_LEAVE_OUT = ["Doc", "include", "libs", "Scripts", "tcl", "Tools", "Lib/test", "Lib/idlelib", "Lib/tkinter",
                 "Lib/turtledemo", "Lib/site-packages", "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll",
-                "NEWS.txt", "python.pdb"]
+                "NEWS.txt", "python.pdb",
+                "python-*.exe"]  # (GitHub's runners keep Python's 33 MB installer beside it)
 SITE_LEAVE_OUT = ["pip", "pip-*", "_pytest", "pytest", "pytest-*", "py.py", "pluggy", "pluggy-*", "iniconfig",
                   "iniconfig-*", "pygments", "pygments-*", "__pycache__",
                   "cv2/opencv_videoio_ffmpeg*",  # reading video files: only the replay tool does that

@@ -443,6 +443,12 @@ def erase_lines(frame: np.ndarray, lines: list[Line], full: bool = True) -> np.n
         crop = frame[cy0:cy1, cx0:cx1]
         mask = np.zeros(crop.shape[:2], np.uint8)
         mask[ey0 - cy0 : ey1 - cy0, ex0 - cx0 : ex1 - cx0] = l.mask
+        if full and l.plain:
+            # light letters on a panel or a tag usually carry a soft drop shadow one or two pixels out (measured on
+            # the Kibo page: the ring right round the glyphs 8-14 levels darker than the panel, the next ones not):
+            # left out, the fill took its colour from that shadow and the words stayed on as faint shapes
+            r = max(1, round(0.1 * l.box[3]))
+            mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
         filled = inpaint(crop, mask, l.box[3], full)
         alpha = cv2.GaussianBlur(mask, (0, 0), 0.8)
         alpha[mask > 0] = 255

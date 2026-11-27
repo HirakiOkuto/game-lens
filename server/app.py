@@ -25,8 +25,8 @@ from pydantic import BaseModel
 from ocr import NO_SPACE, normalize_lang, read_dialog, read_lines, read_name, read_screen, route
 from store import Store
 from fuzzy import close_enough, differences, fuzzy_key
-from translate.engines import (REMOTE, EngineError, extract_glossary, fold_name, get_engine, glossary_terms, match_name,
-                               match_term, translate_blocks)
+from translate.engines import (REMOTE, STREAM, EngineError, clean_mt, extract_glossary, fold_name, get_engine,
+                               glossary_terms, match_name, match_term, translate_blocks)
 
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
@@ -280,6 +280,59 @@ def fill_pattern(pattern: str, nums: list[str], target: str) -> str | None:
 @app.post("/translate/lines", dependencies=[Depends(auth)])
 async def translate_lines(req: TranslateLinesReq):
     """Game text lines -> translations, cached per line (a line seen before comes back without an engine call)."""
+    return await _translate_lines(req)
+
+
+@app.post("/translate/stream", dependencies=[Depends(auth)])
+async def translate_stream(req: TranslateLinesReq):
+    """As /translate/lines, but the translation is sent as the model writes it: lines of JSON, {"partial": text so
+    far} (a local model translating a line), then {"done": what /translate/lines answers} or {"error", "status"}.
+    For a line of dialogue: its first words are on screen in a few tenths of a second, not after the whole line."""
+    import asyncio
+
+    from fastapi.responses import StreamingResponse
+
+    loop = asyncio.get_running_loop()
+    q: asyncio.Queue = asyncio.Queue()
+    target, fixes = req.target, None
+    last = [0.0, ""]
+
+    def partial(text: str):  # (in the worker thread)
+        text = clean_mt(text, target)
+        text = apply_fixes(text, fixes or [])
+        now = time.monotonic()
+        if text and text != last[1] and now - last[0] >= 0.04:  # (a few updates a second are enough to see)
+            last[0], last[1] = now, text
+            loop.call_soon_threadsafe(q.put_nowait, {"partial": text})
+
+    async def work():
+        try:
+            q.put_nowait({"done": await _translate_lines(req, partial)})
+        except HTTPException as e:
+            q.put_nowait({"error": str(e.detail), "status": e.status_code})
+        except Exception as e:  # noqa: BLE001 - the stream must end with something
+            q.put_nowait({"error": f"{type(e).__name__}: {e}", "status": 500})
+
+    if req.series:
+        _, g = store.get_glossary(glossary_key(req.series, req.target))
+        fixes = g.get("tl_fixes")
+
+    async def lines():
+        task = asyncio.create_task(work())
+        try:
+            while True:
+                msg = await q.get()
+                yield json.dumps(msg, ensure_ascii=False) + "\n"
+                if "partial" not in msg:
+                    break
+        finally:
+            if not task.done():
+                task.cancel()  # (the client went away)
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+
+async def _translate_lines(req: TranslateLinesReq, partial=None):
     if req.target not in SUPPORTED_TARGETS:
         raise HTTPException(400, f"target must be one of {SUPPORTED_TARGETS}")
     if req.engine not in GAME_ENGINES:
@@ -380,7 +433,7 @@ async def translate_lines(req: TranslateLinesReq):
         ctx = [c.model_dump() for c in req.context][-12:]
         try:
             tl, used, metrics = await run_in_thread(
-                translate_blocks, todo, glossary, ctx, req.engine, req.allow_cloud, False, src, req.target, True,
+                streamed, partial, todo, glossary, ctx, req.engine, req.allow_cloud, False, src, req.target, True,
             )
         except EngineError as e:
             raise HTTPException(503, f"translation failed: {e}")
@@ -511,6 +564,15 @@ def glossary_get(series: str, target: str = "th"):
 @app.put("/glossary/{series:path}", dependencies=[Depends(auth)])
 def glossary_put(series: str, glossary: dict, target: str = "th"):
     return {"version": store.put_glossary(glossary_key(series, target), glossary)}
+
+
+def streamed(partial, *args):
+    """translate_blocks, with the text so far going to `partial` while a local model writes it (see STREAM)."""
+    STREAM.sink = partial
+    try:
+        return translate_blocks(*args)
+    finally:
+        STREAM.sink = None
 
 
 async def run_in_thread(fn, *args):

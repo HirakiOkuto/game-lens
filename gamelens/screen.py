@@ -2,6 +2,7 @@
 Kept free of app state so tools/render_screen.py can show exactly what the overlay would draw on a screenshot."""
 from __future__ import annotations
 
+import copy
 import re
 from collections import deque
 
@@ -10,6 +11,7 @@ import numpy as np
 
 from .overlay import Item, text_rect_for, to_qimage
 from .render import SIZE_FACTOR, Line, analyze_line, erase_lines, learn_strokes, luminance, outline_for, over_scene
+from .thai import segments
 from .watcher import plain_text, similar
 
 # characters of the source script: a line without any is a number, a resolution, "OFF", "TAA"... and stays as it is
@@ -502,8 +504,10 @@ def choice_items(crop: np.ndarray, px: tuple[int, int, int, int], lines: list[di
 
 
 def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], reading: dict, kind: str, align: str, ink: str,
-                     profile, context: list[dict], strokes, sizes: TextSize, allow_cloud: bool) -> dict:
-    """Translate a complete reading and lay the translation out. Worker thread; the replay tool uses it too."""
+                     profile, context: list[dict], strokes, sizes: TextSize, allow_cloud: bool, partial=None) -> dict:
+    """Translate a complete reading and lay the translation out. Worker thread; the replay tool uses it too.
+    partial: called with the overlay items of the translation so far while a local model is still writing a line
+    of dialogue (the original is covered at the first words; then only the text grows)."""
     labels = kind in ("dialog", "subtitle") and looks_like_labels(reading["lines"])
     if kind == "choice" or labels:  # each piece on its own: answers to pick from, or a menu's labels
         lines = [dict(l, text=l["text"].strip("・·•･.。 ")) for l in reading["lines"]]
@@ -520,11 +524,33 @@ def translate_region(api, crop: np.ndarray, px: tuple[int, int, int, int], readi
         items = choice_items(crop, px, lines, tls, profile.font_scale)
         return {"src": reading["text"], "tl": " / ".join(tls.get(str(i), "") for i in range(len(lines))), "items": items,
                 "engine": res.get("engine", ""), "kind": kind, "cached": bool(res.get("cached"))}
-    res = api.translate_lines([{"id": "a", "src": reading["text"], "kind": kind}], series=profile.series,
-                              target=profile.target, src_lang=profile.src_lang, engine=profile.live_engine or profile.engine,
-                              allow_cloud=allow_cloud, context=context if kind != "name" else [])
+    ask = dict(series=profile.series, target=profile.target, src_lang=profile.src_lang,
+               engine=profile.live_engine or profile.engine, allow_cloud=allow_cloud, context=context if kind != "name" else [])
+    lines = [{"id": "a", "src": reading["text"], "kind": kind}]
+    laid: list[Item] = []  # the item laid out for the first words: the rest only changes its text
+
+    def with_text(tl: str) -> Item | None:
+        if not laid:
+            item = region_item(crop, px, reading["lines"], tl, kind, align, profile.font_scale, strokes, ink, sizes)
+            if item is not None:
+                laid.append(item)
+            return item
+        item = copy.copy(laid[0])
+        item.text = tl
+        return item
+
+    def grown(tl: str):
+        # (whole words only: the last piece may be a word not written to its end yet - นาฬ of นาฬิกา)
+        words = segments(tl)
+        if len(words) > 1 and (item := with_text("".join(words[:-1]).rstrip())) is not None:
+            partial([item])
+
+    if partial is not None and kind in ("dialog", "subtitle"):
+        res = api.translate_stream(lines, partial=grown, **ask)
+    else:
+        res = api.translate_lines(lines, **ask)
     tl = res["lines"].get("a", "")
-    item = region_item(crop, px, reading["lines"], tl, kind, align, profile.font_scale, strokes, ink, sizes)
+    item = with_text(tl) if tl else None
     return {"src": reading["text"], "tl": tl, "items": [item] if item else [], "engine": res.get("engine", ""),
             "kind": kind, "cached": bool(res.get("cached"))}
 

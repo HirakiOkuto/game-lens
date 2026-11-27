@@ -1,6 +1,7 @@
 """HTTP client for the game-lens server (server/: OCR + translation)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import cv2
@@ -72,6 +73,37 @@ class LensClient:
         body = {"lines": lines, "series": series, "target": target, "src_lang": src_lang, "engine": engine,
                 "allow_cloud": allow_cloud, "context": context}
         return self._call("POST", "/translate/lines", json=body)
+
+    def translate_stream(self, lines: list[dict], *, series: str, target: str, src_lang: str, engine: str,
+                         allow_cloud: bool, context: list[dict], partial) -> dict:
+        """translate_lines, with partial(text so far) called while a local model is still writing the translation
+        (worker thread). A server without the stream answers the usual way."""
+        body = {"lines": lines, "series": series, "target": target, "src_lang": src_lang, "engine": engine,
+                "allow_cloud": allow_cloud, "context": context}
+        try:
+            with self.http.stream("POST", self.base + "/translate/stream", json=body, headers=self._headers()) as r:
+                if r.status_code == 404:
+                    r.read()
+                    return self.translate_lines(lines, series=series, target=target, src_lang=src_lang, engine=engine,
+                                                allow_cloud=allow_cloud, context=context)
+                if r.status_code != 200:
+                    r.read()
+                    raise LensError(f"server HTTP {r.status_code}: {r.text[:200]}")
+                for line in r.iter_lines():
+                    if not line.strip():
+                        continue
+                    msg = json.loads(line)
+                    if "partial" in msg:
+                        partial(msg["partial"])
+                    elif "done" in msg:
+                        return msg["done"]
+                    else:
+                        raise LensError(f"server HTTP {msg.get('status', 500)}: {msg.get('error', '')}")
+        except httpx.HTTPError as e:
+            raise LensError(t("Cannot reach the server ({url}): {error}", url=self.base, error=e)) from e
+        except ValueError as e:
+            raise LensError(f"server: {e}") from e
+        raise LensError("server: the translation stream ended early")
 
     def warmup(self, src_lang: str, engine: str) -> dict:
         return self._call("POST", "/warmup", json={"src_lang": src_lang, "engine": engine})

@@ -817,3 +817,54 @@ def test_the_players_fixes_to_ocr_and_to_translations(monkeypatch, tmp_path):
     assert client.put("/glossary/g?target=th", json={"characters": [{"src": "ラフィー", "tl": "Laffey"}], "terms": []},
                       headers=h).json()["version"] == v1 + 1
     assert app_mod.apply_fixes("ก ข", [{"src": "ก", "tl": "x"}, {"src": "ก ข", "tl": "y"}]) == "y"
+
+
+def test_a_line_of_dialogue_streams_as_the_model_writes_it(monkeypatch, tmp_path):
+    """/translate/stream: the translation so far while a local model writes it, then what /translate/lines says.
+    The text so far is cleaned and fixed as the end result is; a line from the cache comes at once."""
+    import json as _json
+
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    pieces = ["「ไป", "กัน", "เถอะ", " ผู้บังคับบัญชา", "」"]
+    asked = []
+
+    class Stream:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_lines(self):
+            for p in pieces:
+                yield "data: " + _json.dumps({"choices": [{"delta": {"content": p}}]}, ensure_ascii=False)
+                yield ""
+            yield "data: [DONE]"
+
+    class Local:
+        def stream(self, method, url, json, timeout):
+            asked.append(json)
+            return Stream()
+
+    monkeypatch.setattr(engines, "_local", Local())
+    monkeypatch.setattr(app_mod, "clean_mt", lambda t, target, source="": t.strip("「」"))
+    monkeypatch.setattr(engines, "clean_mt", lambda t, target, source="": t.strip("「」"))
+    client.put("/glossary/g?target=th", json={"characters": [], "terms": [],
+                                               "tl_fixes": [{"src": "ผู้บังคับบัญชา", "tl": "ผู้บัญชาการ"}]}, headers=h)
+    req = {"series": "g", "engine": "index", "lines": [{"id": "a", "src": "指揮官、行こう", "kind": "dialog"}]}
+
+    def run():
+        with client.stream("POST", "/translate/stream", json=req, headers=h) as r:
+            return [_json.loads(x) for x in r.iter_lines() if x]
+
+    monkeypatch.setattr(app_mod.time, "monotonic", iter(range(100, 10**6)).__next__)  # (no update held back)
+    msgs = run()
+    parts = [m["partial"] for m in msgs if "partial" in m]
+    assert asked[0]["stream"] is True
+    assert parts[0] == "ไป" and parts[-1] == "ไปกันเถอะ ผู้บัญชาการ"
+    assert msgs[-1]["done"]["lines"] == {"a": "ไปกันเถอะ ผู้บัญชาการ"}
+    msgs = run()  # cached: no stream, no model
+    assert len(msgs) == 1 and msgs[0]["done"]["cached"] == ["a"] and len(asked) == 1
+    assert getattr(engines.STREAM, "sink", None) is None

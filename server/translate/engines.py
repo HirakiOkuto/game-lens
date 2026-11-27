@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 
 import httpx
@@ -42,6 +43,51 @@ def http_post(url: str, json, timeout: float = 120, loading_wait: float = 60):
             time.sleep(0.5)
             continue
         return r
+
+
+# Set by a request that wants the translation as it is being written (the game's dialogue: the first words are up
+# in a few tenths of a second instead of after the whole line): called with the text so far. Used once - by the
+# first question to a local model in this thread; a second try (a name that came out wrong) is not shown growing
+# from nothing again, its result simply replaces what was shown.
+STREAM = threading.local()
+
+
+def take_sink():
+    sink = getattr(STREAM, "sink", None)
+    STREAM.sink = None
+    return sink
+
+
+def chat(url: str, body: dict, label: str) -> str:
+    """A local llama.cpp server's chat answer; written out bit by bit to the stream's sink, if there is one."""
+    sink = take_sink()
+    if sink is not None:
+        text = ""
+        try:
+            with _local.stream("POST", url, json={**body, "stream": True}, timeout=120) as r:
+                if r.status_code == 200:
+                    for line in r.iter_lines():
+                        if not line.startswith("data: ") or line == "data: [DONE]":
+                            continue
+                        try:
+                            delta = json.loads(line[6:])["choices"][0]["delta"].get("content") or ""
+                        except (ValueError, KeyError, IndexError):
+                            continue
+                        if delta:
+                            text += delta
+                            sink(text.replace("\ufffd", "").strip())
+                    return text.replace("\ufffd", "").strip()
+                r.read()  # (not answering yet - the model still loading: asked the usual way below)
+        except httpx.HTTPError:
+            pass  # (once more the usual way, which knows what to say)
+    try:
+        r = http_post(url, json=body, timeout=120)
+    except httpx.HTTPError as e:
+        raise EngineError(f"{label} unreachable at {url}: {e}") from e
+    if r.status_code != 200:
+        raise EngineError(f"{label} HTTP {r.status_code}: {r.text[:200]}")
+    # a small model now and then splits a Thai letter between tokens: the broken byte comes back as U+FFFD
+    return (r.json()["choices"][0]["message"].get("content") or "").replace("\ufffd", "").strip()
 
 
 def http_get(url: str, timeout: float = 5):
@@ -437,14 +483,7 @@ class HyMtEngine:
 
     def _ask(self, prompt: str) -> str:
         body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True}
-        try:
-            r = http_post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
-        except httpx.HTTPError as e:
-            raise EngineError(f"Hy-MT unreachable at {self.url}: {e}") from e
-        if r.status_code != 200:
-            raise EngineError(f"Hy-MT HTTP {r.status_code}: {r.text[:200]}")
-        # a small model now and then splits a Thai letter between tokens: the broken byte comes back as U+FFFD
-        return (r.json()["choices"][0]["message"].get("content") or "").replace("\ufffd", "").strip()
+        return chat(f"{self.url}/v1/chat/completions", body, "Hy-MT")
 
     def _with_slots(self, text: str, history, used: list[tuple[str, str]], target: str, style: str) -> str:
         """Translate with N1, N2... standing in for the names, then put the names back. '' if a slot got lost."""
@@ -537,13 +576,7 @@ class IndexTranslateEngine(HyMtEngine):
     def _ask(self, prompt: str) -> str:
         body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0, "max_tokens": 512, "cache_prompt": True,
                 "chat_template_kwargs": {"enable_thinking": False}}
-        try:
-            r = http_post(f"{self.url}/v1/chat/completions", json=body, timeout=120)
-        except httpx.HTTPError as e:
-            raise EngineError(f"Index-Translate unreachable at {self.url}: {e}") from e
-        if r.status_code != 200:
-            raise EngineError(f"Index-Translate HTTP {r.status_code}: {r.text[:200]}")
-        return (r.json()["choices"][0]["message"].get("content") or "").replace("\ufffd", "").strip()
+        return chat(f"{self.url}/v1/chat/completions", body, "Index-Translate")
 
 
 NOISE_RE = re.compile(r"[A-Za-z]{1,2}[\s?!.•·]*")  # a lone Latin letter or two from OCR ("E", "O") is noise

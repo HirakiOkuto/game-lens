@@ -62,6 +62,7 @@ class Bridge(QObject):
     """Worker threads -> UI thread."""
     region_read = Signal(str, object, object)
     region_done = Signal(str, object, object)
+    region_partial = Signal(str, object, object)  # a translation still being written: its words so far
     screen_done = Signal(int, object)
     screen_part = Signal(int, object)  # the translations of a screen that are done so far
     screen_more = Signal(int, object)  # a look at a translated screen found text it did not have
@@ -168,6 +169,8 @@ class Controller(QObject):
         self.bridge = Bridge()
         self.bridge.region_read.connect(self.on_region_read)
         self.bridge.region_done.connect(self.on_region_done)
+        self.bridge.region_partial.connect(self.on_region_partial)
+        self.growing: dict[str, tuple] = {}  # region -> ((seq, line), when its translation began to show)
         self.bridge.screen_done.connect(self.on_screen_done)
         self.bridge.screen_part.connect(self.on_screen_part)
         self.bridge.screen_more.connect(self.on_screen_more)
@@ -955,7 +958,8 @@ class Controller(QObject):
         t0 = time.perf_counter()
         try:
             res = translate_region(self.api, crop, px, got, r.kind, r.align, r.ink, self.profile, list(self.context), strokes,
-                                   self.sizes.setdefault(r.id, TextSize()), self.profile.engine in REMOTE)
+                                   self.sizes.setdefault(r.id, TextSize()), self.profile.engine in REMOTE,
+                                   partial=lambda items: self.bridge.region_partial.emit(r.id, (wt, seq, got), items))
             log.info("region %s %s %d ms%s: %r", r.id, res["engine"], (time.perf_counter() - t0) * 1000,
                      " (cache)" if res["cached"] else "", res["tl"])
         except Exception as e:  # noqa: BLE001
@@ -968,6 +972,27 @@ class Controller(QObject):
         if error != msg or time.monotonic() - at > 20:  # do not repeat the same error every line
             self.last_error = (error, time.monotonic())
             self.toast(friendly_error(error), 4)
+
+    def on_region_partial(self, rid: str, which, items: list):
+        """The first words of a translation that is still being written: up at once, growing as more come (they
+        fade in once, not with every word)."""
+        wt, (seq, line), got = which
+        if self.screen_ref is not None and (self.screen_menu or self.screen_count >= 8):
+            return  # (as on_region_done)
+        if wt is not self.watchers.get(rid) or line != wt.line or seq != wt.seq or wt.in_doubt:
+            return  # other text by now, or not the moment (see on_region_done)
+        self.show_growing(rid, (seq, line), items)
+
+    def show_growing(self, rid: str, key: tuple, items: list):
+        """Put a region's translation up; one whose beginning is up already does not fade in again."""
+        was = self.growing.get(rid)
+        self.overlay.set_pending(rid, None)
+        self.overlay.set_items(rid, items)
+        if was and was[0] == key and self.overlay.items.get(rid) is items:
+            for it in items:
+                it.born = was[1]
+        elif items:
+            self.growing[rid] = (key, items[0].born)
 
     def on_region_done(self, rid: str, which, payload: dict):
         wt, (seq, line), got = which
@@ -986,12 +1011,14 @@ class Controller(QObject):
             return
         self.overlay.set_pending(rid, None)
         if "error" in payload:
+            if self.growing.get(rid, (None,))[0] == (seq, line):
+                self.overlay.clear(rid)  # (the beginning of a translation that never came to an end)
             wt.again()
             wt.read_at = time.monotonic() + 2
             self.show_error(payload["error"])
             return
         self.shown[rid], self.shown_seq[rid] = payload, seq
-        self.overlay.set_items(rid, payload["items"])
+        self.show_growing(rid, (seq, line), payload["items"])
         if payload["tl"]:
             e = self.history_add(payload["kind"], payload["src"], payload["tl"], payload["engine"])
             if self.history_win:

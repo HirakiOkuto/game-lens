@@ -1671,3 +1671,32 @@ def test_a_line_that_comes_up_whole_is_translated_on_the_first_reading():
     reads = [i for i, (e, _) in enumerate(log) if e == "read"]
     first = next(i for i, (e, _) in enumerate(log) if e == "translate")
     assert wants(log) == [new] and first == reads[0] + 1  # the very first reading of it
+
+
+def test_a_line_of_dialogue_comes_up_while_it_is_being_translated():
+    """translate_region with partial: whole words of the translation so far as overlay items (laid out once - the
+    original covered at the first words), then the whole translation."""
+    from PySide6.QtWidgets import QApplication
+
+    from types import SimpleNamespace
+
+    from gamelens.screen import TextSize, translate_region
+
+    QApplication.instance() or QApplication([])
+    crop = scene(len(LINE), LINE)
+    reading = {"text": LINE, "lines": [{"bbox": [18, 30, 420, 34], "text": LINE}]}
+
+    class Api:
+        def translate_stream(self, lines, partial, **kw):
+            for so_far in ["ไป", "ไปกัน", "ไปกันเถ", "ไปกันเถอะ ผู้บัญ"]:
+                partial(so_far)
+            return {"lines": {"a": "ไปกันเถอะ ผู้บัญชาการ"}, "engine": "index", "cached": []}
+
+    profile = SimpleNamespace(series="g", target="th", src_lang="en", live_engine="", engine="index", font_scale=1.0)
+    shown = []
+    res = translate_region(Api(), crop, (0, 0, 640, 90), reading, "dialog", "left", "light", profile, [], None,
+                           TextSize(), False, partial=lambda items: shown.append(items[0]))
+    texts = [it.text for it in shown]
+    assert texts == ["ไป", "ไปกัน", "ไปกันเถอะ ผู้"]  # whole words only (not ไปกันเถ), the first once it is whole
+    assert res["tl"] == "ไปกันเถอะ ผู้บัญชาการ" and res["items"][0].text == res["tl"]
+    assert all(it.patch is shown[0].patch for it in shown + res["items"])  # erased once

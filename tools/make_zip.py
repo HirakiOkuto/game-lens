@@ -6,7 +6,6 @@ computer (keys, token, cache, logs, the Python environment). The model folder is
 from __future__ import annotations
 
 import io
-import json
 import subprocess
 import sys
 import zipfile
@@ -32,10 +31,6 @@ def main():
             if info.is_dir() or name.startswith(LEAVE_OUT):
                 continue
             data = src.read(info)
-            if name == "settings.json":  # models in the app's own folder, not this computer's shared one
-                s = json.loads(data)
-                s["models_dir"] = "models"
-                data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
             if NO_GOOGLE_FREE:
                 data = public_file(name, data)
             dst.writestr("game-lens/" + name, data)

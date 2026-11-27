@@ -136,7 +136,7 @@ class Settings:
     hotkeys: dict = field(default_factory=lambda: {"toggle": "Ctrl+F8", "screen": "F9", "regions": "F10", "history": "F7"})
     peek_key: str = "F8"  # hold to see the original text (polled, not captured: the game still gets the key)
     context_lines: int = 6
-    models_dir: str = "D:/AI/models"  # shared folder with the .gguf translation models
+    models_dir: str = "models"  # folder with the .gguf translation models (relative: in game-lens's own folder)
     local_model: str = "auto"  # the local translator's model: auto (by the graphics card) / index / 7b / 1.8b
     auto_start_server: bool = True  # start the server + local model when game-lens starts
     stop_server_on_exit: bool = True  # ...and stop what we started when it quits

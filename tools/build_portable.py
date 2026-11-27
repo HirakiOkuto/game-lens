@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import io
-import json
 import shutil
 import subprocess
 import sys
@@ -125,10 +124,6 @@ def build_app(google_free: bool) -> None:
             if info.is_dir() or name.startswith(APP_LEAVE_OUT):
                 continue
             data = z.read(info)
-            if name == "settings.json":
-                s = json.loads(data)
-                s["models_dir"] = "models"  # the app's own folder, not this computer's shared one
-                data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
             if not google_free:
                 data = public_file(name, data)
             t = OUT / name

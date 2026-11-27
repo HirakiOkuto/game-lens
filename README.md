@@ -209,6 +209,9 @@ $env:GAMELENS_PROFILE = "profiles/fake-game.json"; .venv\Scripts\python.exe -m g
 .venv\Scripts\python.exe tools\render_screen.py shot.png out.png    # แสดงผลที่ F9 จะให้บนภาพหน้าจอ (ต้องเปิด game-lens อยู่)
 ```
 
+ชุดทดสอบบางส่วนใช้ภาพหน้าจอจากเกมในโฟลเดอร์ `tests/game_data/` ซึ่งเป็นลิขสิทธิ์ของผู้ให้บริการเกม จึงจัดเก็บไว้เฉพาะในเครื่อง
+และไม่รวมอยู่ใน repository หากไม่มีไฟล์ดังกล่าว ชุดทดสอบนั้นจะถูกข้ามโดยอัตโนมัติ
+
 ตัวเลือกของ `render_screen.py`: `--target en` (ภาษาปลายทาง), `--font "Sarabun"` (แบบอักษร),
 `--read-here` (อ่านข้อความด้วยโค้ดปัจจุบันใน `server/ocr.py` โดยไม่ต้องเปิดเซิร์ฟเวอร์ใหม่ ส่วนการแปลยังใช้เซิร์ฟเวอร์ที่เปิดอยู่)
 

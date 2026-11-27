@@ -16,6 +16,15 @@ from gamelens import thai, win32  # noqa: E402
 from gamelens.watcher import TextFollower, has_text, ink_map, similar, stroke_map  # noqa: E402
 
 
+def game_image(name: str) -> np.ndarray:
+    """A screenshot from a game (tests/game_data/): the game company's picture, so kept on this computer only, out of
+    the public repository. Without it (a fresh clone, GitHub's build) the test is skipped."""
+    path = Path(__file__).parent / "game_data" / name
+    if not path.exists():
+        pytest.skip(f"game screenshot {name} is kept out of the repository")
+    return cv2.imread(str(path))
+
+
 TEXT = "The quick brown fox jumps over"
 
 
@@ -228,7 +237,7 @@ def test_analyze_line_small_tags():
     colour is not what lies beside it. Both must still come out as the tag's colour behind its letters."""
     from gamelens.render import analyze_line, luminance
 
-    img = cv2.imread(str(Path(__file__).parent / "data" / "kibo_tags.png"))  # from Azur Promilia's Kibo page
+    img = game_image("kibo_tags.png")  # from Azur Promilia's Kibo page
     white = analyze_line(img, [23, 35, 87, 18])  # 異生類·翼形族: bold blue letters on a white tag
     assert luminance(white.fg) < 160 and luminance(white.bg) > 200
     filled = analyze_line(img, [53, 10, 34, 17])  # 小型: white letters on a blue-grey tag
@@ -241,7 +250,7 @@ def test_analyze_line_light_labels_over_photo_mode_grass():
     grass that runs out of the line and was left standing."""
     from gamelens.render import analyze_line, luminance
 
-    img = cv2.imread(str(Path(__file__).parent / "data" / "photo_labels.png"))  # from Azur Promilia's photo mode
+    img = game_image("photo_labels.png")  # from Azur Promilia's photo mode
     face = analyze_line(img, [47, 30, 34, 22])  # 表情
     assert not face.plain and luminance(face.fg) > 170 and (face.mask > 0).sum() > 300
     tpl = analyze_line(img, [20, 165, 96, 25])  # テンプレート
@@ -1143,7 +1152,7 @@ def test_light_text_over_the_scene_is_found_whole():
     the line is found and erased, its letters measured light, its height the letters' (not the box's)."""
     from gamelens.render import analyze_line, luminance
 
-    img = cv2.imread(str(Path(__file__).parent / "data" / "scene_hint.png"))  # from Azur Promilia, 1080p
+    img = game_image("scene_hint.png")  # from Azur Promilia, 1080p
     a = analyze_line(img, [54, 17, 462, 33])  # を押して、キボのスキルを使って謎解きする
     assert not a.plain and luminance(a.fg) > 200
     assert a.glyph_h <= 26  # the letters are ~20 px: grass reaching through the box is not counted
@@ -1181,7 +1190,7 @@ def test_letters_at_the_end_of_a_line_on_a_gradient_are_found():
     lighter end. They are found (and so erased), not taken for a patch of background running out of the area."""
     from gamelens.render import analyze_line
 
-    img = cv2.imread(str(Path(__file__).parent / "data" / "news_list.png"))  # from Azur Promilia's news
+    img = game_image("news_list.png")  # from Azur Promilia's news
     a = analyze_line(img, [47, 18, 184, 18])  # 絆心の観測「花霞を胸に」
     assert a.box[0] <= 49  # starts where the line starts, not after 絆心
     x0 = a.mask_box[0]

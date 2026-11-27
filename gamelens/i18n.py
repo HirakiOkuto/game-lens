@@ -125,7 +125,8 @@ TH = {
     "Local translation model (recommended)": "โมเดลแปลภาษาในเครื่อง (แนะนำ)",
     "Free, works offline • model picked by your graphics card": "ฟรี ไม่ต้องใช้อินเทอร์เน็ต • เลือกรุ่นตามการ์ดจอโดยอัตโนมัติ",
     "Google — free, no sign-up": "Google — ฟรี ไม่ต้องสมัครสมาชิก",
-    "Free • no graphics card needed": "ฟรี • ไม่ใช้การ์ดจอ",
+    "Free • no graphics card needed • unofficial: may stop working at any time":
+        "ฟรี • ไม่ใช้การ์ดจอ • ช่องทางไม่เป็นทางการ อาจใช้งานไม่ได้โดยไม่แจ้งล่วงหน้า",
     "Free 500,000 characters a month • sign-up needed": "ฟรี 500,000 ตัวอักษรต่อเดือน • ต้องสมัครสมาชิก",
     "Free 2,000,000 characters a month • sign-up needed": "ฟรี 2,000,000 ตัวอักษรต่อเดือน • ต้องสมัครสมาชิก",
     "Best translations • paid per use": "คุณภาพการแปลสูงที่สุด • คิดค่าบริการตามการใช้งาน",

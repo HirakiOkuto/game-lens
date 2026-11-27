@@ -40,5 +40,5 @@ license:
 ## Online translation services (optional)
 
 DeepL, Microsoft Azure, Google Cloud Translation and Anthropic Claude are used only when you choose them and enter your
-own key; their terms of service apply. Copies of game-lens built to be given to others leave out the unofficial
-"Google free" engine.
+own key; their terms of service apply. The "Google free" engine uses Google's unofficial web translation endpoints
+(the ones Chrome uses to translate pages), without an account; Google may limit or change them at any time.

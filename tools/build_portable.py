@@ -117,7 +117,7 @@ def qt_unused(rel: str) -> bool:
                                     "canbus", "assetimporters", "renderplugins"))
 
 
-def build_app(personal: bool) -> None:
+def build_app(google_free: bool) -> None:
     raw = subprocess.run(["git", "archive", "--format=zip", "HEAD"], cwd=ROOT, capture_output=True, check=True).stdout
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         for info in z.infolist():
@@ -129,12 +129,12 @@ def build_app(personal: bool) -> None:
                 s = json.loads(data)
                 s["models_dir"] = "models"  # the app's own folder, not this computer's shared one
                 data = json.dumps(s, ensure_ascii=False, indent=2).encode("utf-8")
-            if not personal:
+            if not google_free:
                 data = public_file(name, data)
             t = OUT / name
             t.parent.mkdir(parents=True, exist_ok=True)
             t.write_bytes(data)
-    if not personal:
+    if not google_free:
         (OUT / MARKER).write_bytes(MARKER_TEXT)
     (OUT / "models").mkdir(exist_ok=True)
     (OUT / "models" / "วางไฟล์โมเดล .gguf ไว้ที่นี่.txt").write_text(
@@ -202,26 +202,27 @@ def main():
     ap.add_argument("--llama", required=True, help="llama.cpp Windows Vulkan x64 release zip")
     ap.add_argument("--icon", default=str(ROOT / "logs" / "game-lens-icon.ico"))
     ap.add_argument("--no-zip", action="store_true")
-    ap.add_argument("--personal", action="store_true", help="keep \"Google free\" (Chrome's key): for your own computers only")
+    ap.add_argument("--no-google-free", action="store_true",
+                    help="leave out \"Google free\" (unofficial: Chrome's built-in key), see tools/public.py")
     a = ap.parse_args()
     if Path(sys.prefix).name != ".venv":
         sys.exit("run it with the .venv's python (its packages are what is copied)")
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
-    build_app(a.personal)
+    build_app(not a.no_google_free)
     build_python()
     build_llama(Path(a.llama))
     build_launcher(Path(a.icon))
     readme()
     for bad in ("token.txt", "keys.json", "cache.sqlite"):
         assert not list(OUT.rglob(bad)), bad
-    if not a.personal:
+    if a.no_google_free:
         assert not has_key((OUT / "server" / "translate" / "web_engines.py").read_bytes()), "Chrome's key left in"
     size = sum(p.stat().st_size for p in OUT.rglob("*") if p.is_file())
     print(f"{OUT}  {size / 1e6:.0f} MB")
     if not a.no_zip:
-        kind = "portable-personal" if a.personal else "portable"  # (a personal one is not to be passed on)
+        kind = "portable-nogoogle" if a.no_google_free else "portable"
         out = ROOT / "dist" / f"game-lens-{kind}-{date.today():%Y%m%d}.zip"
         out.parent.mkdir(exist_ok=True)
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:

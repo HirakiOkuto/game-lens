@@ -1,8 +1,8 @@
-"""What a build given to other people leaves out or adds (tools/build_portable.py and tools/make_zip.py use it).
+"""What a build leaves out or adds (tools/build_portable.py and tools/make_zip.py use it).
 
-"Google free" borrows the API key built into Chrome: one may decide to use that oneself, but it is not ours to hand
-out. A public build has the key taken out of the source and a PUBLIC_BUILD file that hides the engine in the app.
-`--personal` builds keep it (for your own computers only).
+"Google free" uses Google's unofficial endpoints with the API key built into Chrome, as LunaTranslator and others do;
+builds include it. `--no-google-free` makes a build without it: the key taken out of the source and a PUBLIC_BUILD
+file that hides the engine in the app.
 """
 from __future__ import annotations
 
@@ -12,8 +12,7 @@ from pathlib import Path
 
 KEY_RE = re.compile(rb'KEY = "AIza[0-9A-Za-z_\-]+"')
 MARKER = "PUBLIC_BUILD"
-MARKER_TEXT = ("This copy of game-lens is made to be given to others: the unofficial \"Google free\" engine is left "
-               "out.\r\n").encode("utf-8")
+MARKER_TEXT = "This copy of game-lens leaves out the unofficial \"Google free\" engine.\r\n".encode("utf-8")
 
 
 def public_file(name: str, data: bytes) -> bytes:

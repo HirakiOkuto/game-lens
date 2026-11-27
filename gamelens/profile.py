@@ -18,7 +18,8 @@ KIND_LABELS = {"dialog": "Dialogue (text box)", "name": "Speaker name", "subtitl
 ENGINE_INFO = [
     {"key": "hymt", "name": "Local translation model (recommended)",
      "desc": "Free, works offline • model picked by your graphics card", "keys": []},
-    {"key": "google_free", "name": "Google — free, no sign-up", "desc": "Free • no graphics card needed", "keys": []},
+    {"key": "google_free", "name": "Google — free, no sign-up",
+     "desc": "Free • no graphics card needed • unofficial: may stop working at any time", "keys": []},
     {"key": "deepl", "name": "DeepL", "desc": "Free 500,000 characters a month • sign-up needed",
      "keys": [("DEEPL_API_KEY", "API key")], "signup": "https://www.deepl.com/pro-api"},
     {"key": "azure", "name": "Microsoft Azure", "desc": "Free 2,000,000 characters a month • sign-up needed",
@@ -30,8 +31,7 @@ ENGINE_INFO = [
     {"key": "cloud", "name": "Claude", "desc": "Best translations • paid per use",
      "keys": [("ANTHROPIC_API_KEY", "API key")], "signup": "https://console.anthropic.com/"},
 ]
-# a build given to others (tools/public.py) leaves "Google free" out: it borrows the key built into Chrome, which is
-# for one's own use at most, not for handing out
+# a build made with --no-google-free (tools/public.py) leaves "Google free" out
 PUBLIC_BUILD = (Path(__file__).resolve().parent.parent / "PUBLIC_BUILD").exists()
 if PUBLIC_BUILD:
     ENGINE_INFO = [e for e in ENGINE_INFO if e["key"] != "google_free"]

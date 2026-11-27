@@ -51,9 +51,21 @@ class HistoryLog:
         return text[-limit_chars:]
 
 
-# what a correction is: a term, or a character's name (with the character's gender for ครับ / ค่ะ)
+# what a correction is: a term, or a character's name (with the character's gender for ครับ / ค่ะ); or a fix of
+# what the text reader keeps misreading, or of a word the translations keep getting wrong
 FIX_KINDS = (("term", "A word, a thing or a whole line"), ("female", "A character's name (female)"),
-             ("male", "A character's name (male)"), ("neutral", "A character's name (gender not given)"))
+             ("male", "A character's name (male)"), ("neutral", "A character's name (gender not given)"),
+             ("ocr", "A misreading of the original (fixed before translating)"),
+             ("tlfix", "A wrong word in the translation (replaced in every translation)"))
+# per kind: the two fields' labels, the hint, and which text each field starts with
+FIX_FORMS = {
+    "ocr": ("Read as", "Should read", "Keep only the misread part of the original and write it as it should read. "
+            "It is put right before translating, wherever it is read so.", "src", "src"),
+    "tlfix": ("In the translation", "Replace with", "Keep only the wrong word of the translation and write the right "
+              "one. It is replaced in every translation, those made before too.", "tl", "tl"),
+}
+FIX_FORM = ("Original", "Translate as", "Keep only the word or name to correct (e.g. a name in the line), or the whole "
+            "line to fix the whole line. It is translated this way from now on, also in other lines.", "src", "tl")
 
 
 class FixDialog(QDialog):
@@ -65,22 +77,25 @@ class FixDialog(QDialog):
         self.setMinimumWidth(480)
         orig = QLabel(f"<span style='color:#8b93a3'>{html.escape(src)}</span><br><b>{html.escape(tl)}</b>")
         orig.setWordWrap(True)
-        hint = QLabel(t("Keep only the word or name to correct (e.g. a name in the line), or the whole line to fix "
-                        "the whole line. It is translated this way from now on, also in other lines."))
-        hint.setObjectName("muted")
-        hint.setWordWrap(True)
+        self.texts = {"src": src, "tl": tl}
+        self.hint = QLabel()
+        self.hint.setObjectName("muted")
+        self.hint.setWordWrap(True)
         self.src = QLineEdit(src)
         self.tl = QLineEdit(tl)
+        self.src_label, self.tl_label = QLabel(), QLabel()
         self.kind = QComboBox()
         for key, label in FIX_KINDS:
             self.kind.addItem(t(label), key)
+        self.form = None
+        self.kind.currentIndexChanged.connect(lambda _: self._show_form())
         g = QGridLayout()
-        g.addWidget(QLabel(t("Original")), 0, 0)
-        g.addWidget(self.src, 0, 1)
-        g.addWidget(QLabel(t("Translate as")), 1, 0)
-        g.addWidget(self.tl, 1, 1)
-        g.addWidget(QLabel(t("What it is")), 2, 0)
-        g.addWidget(self.kind, 2, 1)
+        g.addWidget(QLabel(t("What it is")), 0, 0)
+        g.addWidget(self.kind, 0, 1)
+        g.addWidget(self.src_label, 1, 0)
+        g.addWidget(self.src, 1, 1)
+        g.addWidget(self.tl_label, 2, 0)
+        g.addWidget(self.tl, 2, 1)
         cancel = QPushButton(t("Cancel"))
         cancel.clicked.connect(self.reject)
         self.save = QPushButton(t("Save"))
@@ -95,9 +110,22 @@ class FixDialog(QDialog):
         row.addWidget(self.save)
         lay = QVBoxLayout(self)
         lay.addWidget(orig)
-        lay.addWidget(hint)
+        lay.addWidget(self.hint)
         lay.addLayout(g)
         lay.addLayout(row)
+        self._show_form()
+
+    def _show_form(self):
+        form = FIX_FORMS.get(self.kind.currentData(), FIX_FORM)
+        if form is self.form:
+            return  # (one name kind for another: what was typed stays)
+        self.form = form
+        a, b, hint, start_a, start_b = form
+        self.src_label.setText(t(a))
+        self.tl_label.setText(t(b))
+        self.hint.setText(t(hint))
+        self.src.setText(self.texts[start_a])
+        self.tl.setText(self.texts[start_b])
         self.tl.setFocus()
         self.tl.selectAll()
 

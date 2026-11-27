@@ -75,6 +75,16 @@ TH = {
     "A character's name (male)": "ชื่อตัวละคร (ชาย)",
     "A word, a thing or a whole line": "คำ ชื่อสิ่งของ หรือทั้งบรรทัด",
     "Correct a translation": "แก้ไขคำแปล",
+    "A misreading of the original (fixed before translating)": "ต้นฉบับที่อ่านผิด (แก้ก่อนแปล)",
+    "A wrong word in the translation (replaced in every translation)": "คำที่แปลผิด (แทนที่ในทุกคำแปล)",
+    "Read as": "อ่านได้เป็น",
+    "Should read": "ที่ถูกต้องคือ",
+    "In the translation": "คำในคำแปล",
+    "Replace with": "แทนที่ด้วย",
+    "Keep only the misread part of the original and write it as it should read. It is put right before translating, wherever it is read so.":
+        "เหลือไว้เฉพาะส่วนของต้นฉบับที่อ่านผิด แล้วพิมพ์ข้อความที่ถูกต้อง ระบบจะแก้ให้ก่อนแปลทุกครั้งที่อ่านได้เช่นนี้",
+    "Keep only the wrong word of the translation and write the right one. It is replaced in every translation, those made before too.":
+        "เหลือไว้เฉพาะคำที่แปลผิด แล้วพิมพ์คำที่ถูกต้อง ระบบจะแทนที่ในทุกคำแปล รวมถึงคำแปลที่มีอยู่แล้ว",
     "Details": "รายละเอียด",
     "Game text translated into {language}, drawn over the game": "แปลข้อความในเกมเป็น{language} แสดงทับบนหน้าจอเกม",
     "Hide details": "ซ่อนรายละเอียด",

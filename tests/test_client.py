@@ -1619,3 +1619,43 @@ def test_erase_does_not_widen_past_a_tight_pill():
     frame, core = _letters((222, 227, 222), pill, 17)
     out = _composite(frame, erase_lines(frame, [_glyph_line(frame, core, 30, "#8796b0")]))
     assert np.abs(out[core > 0].astype(int) - pill).max(axis=1).mean() < 30
+
+
+def test_fixes_to_the_reading_and_the_translations_go_into_the_glossary_file(tmp_path):
+    """A misreading and a wrong word are kept in the glossary file too (their own lists), only the file's count."""
+    from gamelens.glossary import add_correction
+    from gamelens.screen import merge_glossary
+
+    path = tmp_path / "game.th.json"
+    add_correction(path, "指揮宮", "指揮官", "ocr")
+    add_correction(path, "ผู้บังคับบัญชา", "ผู้บัญชาการ", "tlfix")
+    add_correction(path, "指揮宮", "指揮官さん", "ocr")  # the same misreading again: replaced
+    d = json.loads(path.read_text(encoding="utf-8"))
+    assert d["ocr_fixes"] == [{"src": "指揮宮", "tl": "指揮官さん"}] and d["tl_fixes"][0]["tl"] == "ผู้บัญชาการ"
+    assert d["characters"] == [] and d["terms"] == []
+    server = {"characters": [], "terms": [], "ocr_fixes": [{"src": "old", "tl": "x"}]}
+    m = merge_glossary(d, server)
+    assert m["ocr_fixes"] == d["ocr_fixes"] and m["tl_fixes"] == d["tl_fixes"]
+    assert merge_glossary({"characters": [], "terms": []}, server)["ocr_fixes"] == []  # taken out of the file: gone
+    assert "ocr_fixes" not in merge_glossary({"characters": [], "terms": []}, {"characters": [], "terms": []})
+
+
+def test_fix_dialog_fields_follow_the_kind():
+    from PySide6.QtWidgets import QApplication
+
+    from gamelens.history import FIX_KINDS, FixDialog
+
+    QApplication.instance() or QApplication([])
+    d = FixDialog("指揮宮、行こう", "ผู้บังคับบัญชา ไปกัน")
+    assert (d.src.text(), d.tl.text(), d.kind.currentData()) == ("指揮宮、行こう", "ผู้บังคับบัญชา ไปกัน", "term")
+    d.kind.setCurrentIndex([k for k, _ in FIX_KINDS].index("tlfix"))
+    assert d.src.text() == d.tl.text() == "ผู้บังคับบัญชา ไปกัน"
+    d.tl.setText("ผู้บัญชาการ ไปกัน")
+    d.kind.setCurrentIndex(4)  # ocr
+    assert d.src.text() == d.tl.text() == "指揮宮、行こう" and d.value()[2] == "ocr"
+    d.tl.setText("x")
+    d.kind.setCurrentIndex(1)
+    d.kind.setCurrentIndex(2)  # one name kind for another: what was typed stays
+    d.tl.setText("Kirk")
+    d.kind.setCurrentIndex(3)
+    assert d.tl.text() == "Kirk"

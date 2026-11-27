@@ -190,6 +190,14 @@ def with_learned(glossary: dict, learned: list[tuple[str, str]]) -> dict:
 NOT_A_NAME: set[tuple[str, str]] = set()  # (glossary key, text) the engine gave no name for: not asked again
 
 
+def apply_fixes(text: str, fixes: list) -> str:
+    """text with each fix's "src" replaced by its "tl", the longest first (so a fix of a whole phrase is not undone by
+    one of a word in it)."""
+    for f in sorted((f for f in fixes or [] if isinstance(f, dict) and f.get("src")), key=lambda f: -len(f["src"])):
+        text = text.replace(f["src"], f.get("tl", ""))
+    return text
+
+
 def line_scope(src: str, kind: str, series: str = "") -> str:
     return f"{src}|{'ui3' if kind == 'ui' else kind}|{series}"
 
@@ -282,6 +290,9 @@ async def translate_lines(req: TranslateLinesReq):
     gver, glossary = store.get_glossary(gkey) if req.series else (0, {})
     if req.series:
         glossary = with_learned(glossary, store.get_learned(gkey))
+    # the player's fixes: what OCR keeps misreading, put right before anything else looks at the line (the cache too)
+    for l in req.lines:
+        l.src = apply_fixes(l.src, glossary.get("ocr_fixes"))
     keys = {l.id: line_key(src, l.kind, l.src.strip(), gkey) for l in req.lines}
     cached = store.get_lines(sorted(set(keys.values())), req.target, gver, req.engine)
     masked = {l.id: mask_numbers(l.src.strip()) for l in req.lines if l.kind == "ui"}
@@ -387,6 +398,9 @@ async def translate_lines(req: TranslateLinesReq):
     if from_alike:  # (and the misreading's own key, so it is found at once next time)
         store.put_lines([(keys[i], out[i]) for i in from_alike], req.target, gver, req.engine, req.engine)
     engine = max(set(engines_used), key=engines_used.count) if engines_used else "none"
+    # ...and words the engine keeps getting wrong, put right in what goes back (not in the cache: a fix changed or
+    # taken out is so at once, for lines translated before too)
+    out = {i: apply_fixes(v, glossary.get("tl_fixes")) if v else v for i, v in out.items()}
     return {"lines": out, "engine": engine, "engineRequested": req.engine, "cached": from_cache, "alike": from_alike,
             "metrics": {**metrics, "totalMs": round((time.perf_counter() - t0) * 1000)}}
 

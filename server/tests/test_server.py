@@ -791,3 +791,29 @@ def test_a_line_ocr_misread_a_little_reuses_the_translation(monkeypatch, tmp_pat
     # the misreading now has its own entry; but it is no base for further misreadings (they would drift)
     again = client.post("/translate/lines", json={"engine": "local", "lines": [d("m", "キボのカを使って扉を開けよう")]}, headers=h).json()
     assert again["cached"] == ["m"] and again["alike"] == []
+
+
+def test_the_players_fixes_to_ocr_and_to_translations(monkeypatch, tmp_path):
+    """ocr_fixes put right what OCR keeps misreading before the line is translated (or looked up); tl_fixes put right
+    a word in every translation, cached ones too. Neither throws the cached translations away."""
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    fake = FakeEngine([{"lines": [{"id": "a", "tl": "ผู้บังคับบัญชา ไปกันเถอะ"}]}])
+    seen = []
+    orig = fake.chat_json
+    fake.chat_json = lambda system, user, schema, max_tokens=4096: (seen.append(user), orig(system, user, schema))[1]
+    monkeypatch.setitem(engines._engines, "local", fake)
+    g = {"characters": [], "terms": []}
+    v1 = client.put("/glossary/g?target=th", json=g, headers=h).json()["version"]
+    v2 = client.put("/glossary/g?target=th", json={**g, "ocr_fixes": [{"src": "指揮宮", "tl": "指揮官"}],
+                                                    "tl_fixes": [{"src": "ผู้บังคับบัญชา", "tl": "ผู้บัญชาการ"}]}, headers=h).json()["version"]
+    assert v2 == v1  # (no names or terms changed: the cache stays)
+    req = {"series": "g", "engine": "local", "lines": [{"id": "a", "src": "指揮宮、行こう", "kind": "dialog"}]}
+    d = client.post("/translate/lines", json=req, headers=h).json()
+    assert "指揮官、行こう" in seen[0] and d["lines"]["a"] == "ผู้บัญชาการ ไปกันเถอะ"
+    # the correctly read line is the same line: from the cache, fixed on the way out
+    d = client.post("/translate/lines", json={**req, "lines": [{"id": "a", "src": "指揮官、行こう", "kind": "dialog"}]},
+                    headers=h).json()
+    assert d["cached"] == ["a"] and d["lines"]["a"] == "ผู้บัญชาการ ไปกันเถอะ" and fake.calls == 1
+    assert client.put("/glossary/g?target=th", json={"characters": [{"src": "ラフィー", "tl": "Laffey"}], "terms": []},
+                      headers=h).json()["version"] == v1 + 1
+    assert app_mod.apply_fixes("ก ข", [{"src": "ก", "tl": "x"}, {"src": "ก ข", "tl": "y"}]) == "y"

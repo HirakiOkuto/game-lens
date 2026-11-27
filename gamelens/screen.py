@@ -587,10 +587,14 @@ def begins(old: dict, new: dict) -> bool:
 
 def merge_glossary(base: dict, server: dict) -> dict:
     """The glossary file (base) wins for every name it has; names only the server knows (found from the game's
-    own text with the history window's button) are kept after them."""
+    own text with the history window's button) are kept after them. The fixes to the reading and to the
+    translations are the file's alone (one taken out of the file is gone)."""
     out = {}
     for part in ("characters", "terms"):
         mine = [e for e in base.get(part, []) if e.get("src")]
         have = {e["src"] for e in mine}
         out[part] = mine + [e for e in server.get(part, []) if e.get("src") and e["src"] not in have]
+    for part in ("ocr_fixes", "tl_fixes"):
+        if base.get(part) or server.get(part):
+            out[part] = [e for e in base.get(part, []) if e.get("src")]
     return out

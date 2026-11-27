@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS learned_names (
 """
 
 
+UNTOLD = ("ocr_fixes", "tl_fixes", "_about")  # glossary parts the translation engine never sees
+
+
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,13 +79,20 @@ class Store:
         return (r[0][0], json.loads(r[0][1])) if r else (0, {"characters": [], "terms": []})
 
     def put_glossary(self, series_key: str, glossary: dict) -> int:
+        """The version (which keys the cached lines) goes up only when what the engine is told changes: the fixes
+        to OCR's reading and to the translations are applied round the cache, and a new one keeps it."""
         with self.lock:
-            ver, _ = self.get_glossary(series_key)
+            ver, old = self.get_glossary(series_key)
+            told = lambda g: {k: v for k, v in g.items() if k not in UNTOLD}  # noqa: E731
+            if self._q("SELECT 1 FROM glossaries WHERE series_key=?", (series_key,)) and told(old) == told(glossary):
+                new = ver
+            else:
+                new = ver + 1
             self._q(
                 "INSERT OR REPLACE INTO glossaries VALUES (?,?,?,?)",
-                (series_key, ver + 1, json.dumps(glossary, ensure_ascii=False), time.time()),
+                (series_key, new, json.dumps(glossary, ensure_ascii=False), time.time()),
             )
-            return ver + 1
+            return new
 
     # names of speakers the glossary does not have, as the engine wrote them in Latin letters the first time: kept
     # apart from the glossary (whose version keys the cache), so learning one does not throw the cache away

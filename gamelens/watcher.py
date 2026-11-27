@@ -207,6 +207,7 @@ class TextFollower:
         self.read_at = -9.0
         self.read_n = -1  # stroke count and strokes when the last reading was taken
         self.read_strokes: np.ndarray | None = None
+        self.read_frame: np.ndarray | None = None  # the strokes of the very frame that was read
         self.last_text = ""
         self.misses = 0
         self.seq = 0  # translations of an older text are out of date
@@ -258,7 +259,7 @@ class TextFollower:
                 due = self.checks < len(CHECKS) and now - self.done_at >= CHECKS[self.checks]
                 if not self.reading and (doubt or due):
                     self.checks += due
-                    self.reading, self.read_at, self.read_n, self.read_strokes = True, now, n, p
+                    self.reading, self.read_at, self.read_n, self.read_strokes, self.read_frame = True, now, n, p, strokes
                     return "read"
                 return None
             self.gone_text, self.gone_at = self.last_text, now
@@ -284,7 +285,7 @@ class TextFollower:
         if self.misses >= 2 and self.read_strokes is not None and not self._moved(p, n):
             return None  # the same strokes that were unreadable twice
         self.reading, self.read_at = True, now
-        self.read_n, self.read_strokes = n, p
+        self.read_n, self.read_strokes, self.read_frame = n, p, strokes
         return "read"
 
     def _moved(self, p, n) -> bool:
@@ -311,7 +312,7 @@ class TextFollower:
             self.last_text = ""
             return None
         self.misses = 0
-        growing = self._grown(int(self.persistent.sum()))  # typed on while it was being read
+        growing = self._typed_on()
         quiet = now - self.grew_at >= QUIET and not growing and not self._moved(self.persistent, int(self.persistent.sum()))
         back = now - self.gone_at <= BACK and bool(plain_text(text)) and same_text(self.gone_text, text)
         same = bool(self.last_text) and same_text(self.last_text, text)
@@ -324,6 +325,16 @@ class TextFollower:
             self._take(now)
             return "translate"
         return None
+
+    def _typed_on(self) -> bool:
+        """Were letters added after the frame that was read? The latest frames against that frame itself: the
+        strokes that stood in the last few frames lag behind both - a line that came up all at once was read whole
+        while they still had only part of it (taken for typing on, it waited for another reading, a quarter of a
+        second), and letters typed just now are not in them yet."""
+        if self.read_frame is None or self.read_frame.shape != self.hist[-1].shape or len(self.hist) < 2:
+            return self._grown(int(self.persistent.sum()))
+        new = int((self.hist[-1] & self.hist[-2] & ~self.read_frame).sum())
+        return new > 0.12 * int(self.read_frame.sum()) + 10 or self._grown(int(self.persistent.sum())) and new > 10
 
     def _take(self, now: float):
         # what was read; what was typed since is to be noticed

@@ -1659,3 +1659,15 @@ def test_fix_dialog_fields_follow_the_kind():
     d.tl.setText("Kirk")
     d.kind.setCurrentIndex(3)
     assert d.tl.text() == "Kirk"
+
+
+def test_a_line_that_comes_up_whole_is_translated_on_the_first_reading():
+    """Text that comes up (nearly) at once is read as soon as it is noticed - while the strokes that stood in the
+    last few frames still hold only part of it. The frame that was read had all of it: no second reading (~0.25 s)
+    is waited for."""
+    w = TextFollower()
+    new = "Another line came up at once!"
+    log, t = follow(w, [(scene(0), "")] * 6 + [(scene(10, new), new[:10])] * 2 + still(new, 16))
+    reads = [i for i, (e, _) in enumerate(log) if e == "read"]
+    first = next(i for i, (e, _) in enumerate(log) if e == "translate")
+    assert wants(log) == [new] and first == reads[0] + 1  # the very first reading of it

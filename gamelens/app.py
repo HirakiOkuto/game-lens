@@ -139,6 +139,7 @@ def region_px(rect: list[float], shape) -> tuple[int, int, int, int]:
 
 LANG_NAMES = dict(GAME_LANGS)
 STILL = 0.35  # share of the screen's strokes in parts that moved, below which its text counts as standing still
+FEW = 3  # letters: less than that in a dialogue region is no line of dialogue
 
 
 class Controller(QObject):
@@ -255,7 +256,9 @@ class Controller(QObject):
             self.notify("game-lens", t("The key {key} is used by another program (change it under Keys in the game-lens "
                                        "window)", key=self.settings.hotkeys[name]))
 
-        self.timer = QTimer(self, interval=50, timeout=self.tick)
+        # (precise: a coarse timer on Windows ticks every 62.5 ms, not 50 - new text was noticed later, and the
+        # screen took a second instead of 0.8 s to count as still)
+        self.timer = QTimer(self, interval=50, timeout=self.tick, timerType=Qt.TimerType.PreciseTimer)
         self.timer.start()
         self.status_timer = QTimer(self, interval=2000, timeout=lambda: self.pool.submit(self.poll_status))
         self.status_timer.start()
@@ -921,7 +924,7 @@ class Controller(QObject):
         what = wt.on_read(got["text"] if got else "", now)
         if got:
             self.readings[rid] = got
-        if what:
+        if what and (r.kind == "name" or len(plain_text(got["text"] if got else "")) >= FEW or what == "hide"):
             self.region_active = now  # something is being said: no time to read the whole screen
         if what == "hide":
             self.overlay.clear(rid)
@@ -1069,7 +1072,10 @@ class Controller(QObject):
             if changed <= STILL:
                 return  # handled already
         wts = {r.kind: self.watchers[r.id] for r in self.profile.regions}
-        settled = {k for k, w in wts.items() if w.settled and not (k == "name" and len(plain_text(w.last_text)) > 10)}
+        # (a letter or two in a dialogue region is a piece of a menu that opened over it, not someone speaking:
+        # taken for that, the menu waited 2 s instead of 0.7 s to be read)
+        settled = {k for k, w in wts.items() if w.settled and not (k == "name" and len(plain_text(w.last_text)) > 10)
+                   and (k == "name" or len(plain_text(w.last_text)) >= FEW)}
         # (the wait counts from the last reading too: from the moment the screen went still only, a player standing
         # in the world for more than 8 s had it read again as soon as the reading before was done, endlessly)
         still = now - max(self.auto_still_since, self.region_active, self.auto_read_at)

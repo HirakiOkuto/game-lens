@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS line_tl (
   tl TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (line_key, target, glossary_ver, want));
 CREATE TABLE IF NOT EXISTS glossaries (
   series_key TEXT PRIMARY KEY, version INTEGER NOT NULL, json TEXT NOT NULL, updated REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS line_fuzzy (
+  fuzzy_key TEXT NOT NULL, line_key TEXT NOT NULL, text TEXT NOT NULL, PRIMARY KEY (fuzzy_key, line_key));
 CREATE TABLE IF NOT EXISTS learned_names (
   series_key TEXT NOT NULL, src TEXT NOT NULL, tl TEXT NOT NULL, created REAL NOT NULL, PRIMARY KEY (series_key, src));
 """
@@ -54,6 +56,21 @@ class Store:
             )
             self.db.commit()
 
+    # lines translated before, by the key they share with their misreadings (fuzzy.py): the text, to compare
+    def get_fuzzy(self, fkeys: list[str]) -> dict[str, list[tuple[str, str]]]:
+        if not fkeys:
+            return {}
+        out: dict[str, list[tuple[str, str]]] = {}
+        marks = ",".join("?" * len(fkeys))
+        for f, k, t in self._q(f"SELECT fuzzy_key, line_key, text FROM line_fuzzy WHERE fuzzy_key IN ({marks})", tuple(fkeys)):
+            out.setdefault(f, []).append((k, t))
+        return out
+
+    def put_fuzzy(self, items: list[tuple[str, str, str]]):
+        with self.lock:
+            self.db.executemany("INSERT OR REPLACE INTO line_fuzzy VALUES (?,?,?)", items)
+            self.db.commit()
+
     def get_glossary(self, series_key: str) -> tuple[int, dict]:
         r = self._q("SELECT version, json FROM glossaries WHERE series_key=?", (series_key,))
         return (r[0][0], json.loads(r[0][1])) if r else (0, {"characters": [], "terms": []})
@@ -77,3 +94,4 @@ class Store:
 
     def clear(self):
         self._q("DELETE FROM line_tl")
+        self._q("DELETE FROM line_fuzzy")

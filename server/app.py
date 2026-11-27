@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from ocr import NO_SPACE, normalize_lang, read_dialog, read_lines, read_name, read_screen, route
 from store import Store
+from fuzzy import close_enough, differences, fuzzy_key
 from translate.engines import (REMOTE, EngineError, extract_glossary, fold_name, get_engine, glossary_terms, match_name,
                                match_term, translate_blocks)
 
@@ -189,6 +190,10 @@ def with_learned(glossary: dict, learned: list[tuple[str, str]]) -> dict:
 NOT_A_NAME: set[tuple[str, str]] = set()  # (glossary key, text) the engine gave no name for: not asked again
 
 
+def line_scope(src: str, kind: str, series: str = "") -> str:
+    return f"{src}|{'ui3' if kind == 'ui' else kind}|{series}"
+
+
 def line_key(src: str, kind: str, text: str, series: str = "") -> str:
     # menu text is cached under "ui3": translations made while the labels before one were its context (which
     # copied their translations into it), or with the note for spoken dialogue (which added to descriptions),
@@ -282,11 +287,22 @@ async def translate_lines(req: TranslateLinesReq):
     masked = {l.id: mask_numbers(l.src.strip()) for l in req.lines if l.kind == "ui"}
     pkeys = {i: line_key(src, "ui#n", m, gkey) for i, (m, nums) in masked.items() if nums and keys[i] not in cached}
     patterns = store.get_lines(sorted(set(pkeys.values())), req.target, gver, req.engine) if pkeys else {}
+    # a line OCR read a little differently from one translated before: that translation (fuzzy.py)
+    fkeys = {l.id: f for l in req.lines if l.kind != "name" and keys[l.id] not in cached
+             and (f := fuzzy_key(line_scope(src, l.kind, gkey), l.src.strip()))}
+    seen = store.get_fuzzy(sorted(set(fkeys.values())))
+    alike: dict[str, list[str]] = {}  # line id -> keys of the lines it may be a misreading of, nearest first
+    for l in req.lines:
+        got = [(differences(t, l.src.strip()), k) for k, t in seen.get(fkeys.get(l.id, ""), [])
+               if close_enough(t, l.src.strip())]
+        if got:
+            alike[l.id] = [k for _, k in sorted(got)]
+    near = store.get_lines(sorted({k for v in alike.values() for k in v}), req.target, gver, req.engine)
     # an earlier fallback is cached under the requested engine; retry once that engine is usable again
     remote_ok = req.engine in REMOTE and req.allow_cloud and get_engine(req.engine).available()
     local_ok = None  # (a local engine that failed once - loading, a timeout - is asked again once it is up)
     out: dict[str, str] = {}
-    from_cache, todo, engines_used = [], [], []
+    from_cache, from_alike, todo, engines_used = [], [], [], []
     names = glossary_terms(glossary)
     if req.series and req.target != "en":
         # a speaker the glossary does not have: written in Latin letters like the known names (the official Thai
@@ -339,6 +355,14 @@ async def translate_lines(req: TranslateLinesReq):
             from_cache.append(l.id)
             engines_used.append(pat[0])
             continue
+        # (only what the engine asked for made: a fallback's translation is not carried to a new line)
+        twin = next((near[k] for k in alike.get(l.id, []) if k in near and near[k][0] == req.engine), None)
+        if twin:
+            out[l.id] = twin[1]
+            from_cache.append(l.id)
+            from_alike.append(l.id)
+            engines_used.append(twin[0])
+            continue
         todo.append({"id": l.id, "src": text, "kind": l.kind})
     metrics: dict = {}
     if todo:
@@ -353,13 +377,17 @@ async def translate_lines(req: TranslateLinesReq):
             out[b["id"]] = tl.get(b["id"], "")
         # (not an empty answer: a model's slip would come back for the line from then on)
         store.put_lines([(keys[b["id"]], tl[b["id"]]) for b in todo if tl.get(b["id"])], req.target, gver, req.engine, used)
+        # (only the lines the engine translated: a misreading kept as the line itself would let the next one drift)
+        store.put_fuzzy([(fkeys[b["id"]], keys[b["id"]], b["src"]) for b in todo if b["id"] in fkeys and tl.get(b["id"])])
         new = [(pkeys[b["id"]], p) for b in todo if b["id"] in pkeys and tl.get(b["id"])
                and (p := make_pattern(masked[b["id"]][1], tl[b["id"]]))]
         if new:
             store.put_lines(new, req.target, gver, req.engine, used)
         engines_used.append(used)
+    if from_alike:  # (and the misreading's own key, so it is found at once next time)
+        store.put_lines([(keys[i], out[i]) for i in from_alike], req.target, gver, req.engine, req.engine)
     engine = max(set(engines_used), key=engines_used.count) if engines_used else "none"
-    return {"lines": out, "engine": engine, "engineRequested": req.engine, "cached": from_cache,
+    return {"lines": out, "engine": engine, "engineRequested": req.engine, "cached": from_cache, "alike": from_alike,
             "metrics": {**metrics, "totalMs": round((time.perf_counter() - t0) * 1000)}}
 
 

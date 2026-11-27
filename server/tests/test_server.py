@@ -766,3 +766,28 @@ def test_review_fixes_latin_games_short_words(monkeypatch):
     seen.clear()
     engines.translate_blocks(blocks, {}, [], "local", False, False, "ja", "th", True)
     assert seen == []
+
+
+def test_a_line_ocr_misread_a_little_reuses_the_translation(monkeypatch, tmp_path):
+    """The same sentence read again with a lost voiced mark, a big っ, 力 for カ or a stray 、 is not translated
+    again; a changed word or number is, and so is a short line."""
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    fake = FakeEngine([{"lines": [{"id": "a", "tl": "ใช้พลังของคิโบเปิดประตูกันเถอะ"}, {"id": "s", "tl": "สั้น"}]},
+                       {"lines": [{"id": "b", "tl": "ข"}, {"id": "c", "tl": "ใช้พลังของคิโบปิดประตูกันเถอะ"}, {"id": "n", "tl": "ห้าชิ้นของคิโบ"},
+                                  {"id": "s", "tl": "สั้นใหม่"}]}])
+    monkeypatch.setitem(engines._engines, "local", fake)
+    d = lambda i, s: {"id": i, "src": s, "kind": "dialog"}  # noqa: E731
+    client.post("/translate/lines", json={"engine": "local", "lines": [d("a", "キボの力を使って、扉を開けよう！"),
+                                                                       d("s", "はい、どうぞ")]}, headers=h)
+    r = client.post("/translate/lines", json={"engine": "local", "lines": [
+        d("b", "キホのカを使つて扉を開けよう"),  # three misreadings in 14: too many
+        d("m", "キボのカを使って扉を開けよう"),  # one, and punctuation lost
+        d("c", "キボの力を使って、扉を閉めよう！"),  # a different word
+        d("n", "キボの力を5つ使って扉を開けよう"),  # ...and words more
+        d("s", "はい、どうそ")]}, headers=h).json()  # short: a voiced mark may be the whole word
+    assert r["alike"] == ["m"] and r["lines"]["m"] == "ใช้พลังของคิโบเปิดประตูกันเถอะ"
+    assert r["lines"]["c"] == "ใช้พลังของคิโบปิดประตูกันเถอะ" and r["lines"]["s"] == "สั้นใหม่"
+    assert fake.calls == 2
+    # the misreading now has its own entry; but it is no base for further misreadings (they would drift)
+    again = client.post("/translate/lines", json={"engine": "local", "lines": [d("m", "キボのカを使って扉を開けよう")]}, headers=h).json()
+    assert again["cached"] == ["m"] and again["alike"] == []

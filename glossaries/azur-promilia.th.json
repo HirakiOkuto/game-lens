@@ -7,7 +7,7 @@
     {"src": "テララ", "aliases": [], "tl": "Terara", "gender": "female", "role": "", "source": "official"},
     {"src": "メーツァ", "aliases": [], "tl": "Metsa", "gender": "female", "role": "", "source": "official"},
 
-    {"src": "アビィ", "aliases": ["アビー"], "tl": "Abby", "gender": "female", "role": "", "source": "fan"},
+    {"src": "アビィ", "aliases": ["アビー", "アビイ"], "tl": "Abby", "gender": "female", "role": "", "source": "fan"},
     {"src": "シャル", "aliases": [], "tl": "Shalle", "gender": "female", "role": "", "source": "fan"},
     {"src": "ルルカ", "aliases": [], "tl": "Luruka", "gender": "female", "role": "", "source": "fan"},
     {"src": "モーレン", "aliases": [], "tl": "Morwyn", "gender": "female", "role": "", "source": "fan"},
@@ -26,9 +26,13 @@
     {"src": "源千代", "aliases": [], "tl": "Minamoto Chiyo", "gender": "female", "role": "", "source": "fan"},
     {"src": "洛卿", "aliases": [], "tl": "Luoqing", "gender": "", "role": "", "source": "fan"},
 
-    {"src": "ルミィ", "aliases": [], "tl": "Lumi", "gender": "female", "role": "fairy companion", "source": "guess: no English name found on any site"},
+    {"src": "ルミィ", "aliases": ["ルミイ"], "tl": "Lumi", "gender": "female", "role": "fairy companion", "source": "guess: no English name found on any site"},
     {"src": "ラフィー", "aliases": [], "tl": "Laffey", "gender": "female", "role": "", "source": "official (Azur Lane)"},
-    {"src": "ジャベリン", "aliases": [], "tl": "Javelin", "gender": "female", "role": "", "source": "official (Azur Lane)"}
+    {"src": "ジャベリン", "aliases": [], "tl": "Javelin", "gender": "female", "role": "", "source": "official (Azur Lane)"},
+
+    {"src": "シフォン", "aliases": [], "tl": "Chiffon", "gender": "", "role": "", "source": "guess: no English name found (the engine wrote it ซิฟอน, ชีฟอง; Google ผ้าชีฟอง)"},
+    {"src": "ティナナ", "aliases": [], "tl": "Tinana", "gender": "female", "role": "fruit seller", "source": "guess: no English name found"},
+    {"src": "カーク", "aliases": [], "tl": "Kirk", "gender": "", "role": "", "source": "guess: no English name found"}
   ],
   "terms": [
     {"src": "星臨者", "reading": "", "tl": "Starborn", "note": "the player character", "source": "fan"},
@@ -45,6 +49,13 @@
     {"src": "レーブ", "reading": "", "tl": "Lebe", "note": "place", "source": "official"},
     {"src": "マウント", "reading": "", "tl": "พาหนะ", "note": "a Kibo the player rides (menus)", "source": "translation"},
     {"src": "葉野菜", "reading": "", "tl": "ผักใบ", "note": "leafy vegetable", "source": "translation"},
-    {"src": "天性", "reading": "", "tl": "นิสัย", "note": "a Kibo's nature (a short tag)", "source": "translation"}
+    {"src": "天性", "reading": "", "tl": "นิสัย", "note": "a Kibo's nature (a short tag)", "source": "translation"},
+    {"src": "キャベッコ", "reading": "", "tl": "Cabbecco", "note": "Kibo", "source": "guess: no English name found (Google wrote กะหล่ำปลี, cabbage)"},
+    {"src": "ソザンカ", "reading": "", "tl": "Sozanka", "note": "ソザンカのローブ", "source": "guess"},
+    {"src": "ステラカード", "reading": "", "tl": "การ์ดสเตลล่า", "note": "Stella Card", "source": "translation"},
+    {"src": "ステラストーン", "reading": "", "tl": "หินสเตลล่า", "note": "Stella Stone (the engine garbled it: สเทรัสโตน)", "source": "translation"},
+    {"src": "スターリンク", "reading": "", "tl": "สตาร์ลิงก์", "note": "binding a Kibo to a Stella Card", "source": "translation"},
+    {"src": "凶獣", "reading": "", "tl": "อสูรร้าย", "note": "ferocious beasts (the engine added ปีศาจ)", "source": "translation"},
+    {"src": "竜人", "reading": "", "tl": "มนุษย์มังกร", "note": "dragonkin (竜人文明)", "source": "translation"}
   ]
 }

@@ -1307,3 +1307,43 @@ def test_a_build_to_give_away_leaves_out_chromes_key():
     site = Path(_sys.prefix) / "Lib" / "site-packages"
     listed = public.package_licenses(site).decode()
     assert "PySide6" in listed and "LGPL-3.0" in listed and "numpy" in listed
+
+
+def test_the_window_comes_back_after_the_regions_are_set_from_it(monkeypatch):
+    """Setting the regions from the window's button hid the window for good once regions were saved; started with F10
+    from the game (the window closed), it stays in the tray."""
+    from types import SimpleNamespace
+
+    import gamelens.app as app_mod
+    from gamelens.app import Controller
+
+    class Editor:
+        def __init__(self, *a):
+            self.saved, self.cancelled = SimpleNamespace(connect=lambda f: setattr(self, "on_saved", f)), \
+                SimpleNamespace(connect=lambda f: None)
+
+        def setStyleSheet(self, *_): pass
+        def show(self): pass
+        def activateWindow(self): pass
+        def setFocus(self): pass
+
+    editors = []
+    monkeypatch.setattr(app_mod, "RegionEditor", lambda *a: editors.append(Editor()) or editors[-1])
+    monkeypatch.setattr(app_mod.win32, "client_rect", lambda hwnd: (0, 0, 100, 60))
+
+    def controller(open_):
+        shown = []
+        panel = SimpleNamespace(visible=open_, isVisible=lambda: panel.visible,
+                                hide=lambda: setattr(panel, "visible", False))
+        c = SimpleNamespace(editor=None, cap=SimpleNamespace(client_frame=lambda: (np.zeros((60, 100, 3), np.uint8), 0)),
+                            hwnd=1, overlay=SimpleNamespace(follow=lambda cr: None, hide=lambda: None, geometry=lambda: None),
+                            panel=panel, profile=SimpleNamespace(regions=[], src_lang="ja", save=lambda: None), health=False,
+                            shown={}, shown_seq={}, reset_watchers=lambda: None, toast=lambda *a: None,
+                            refresh_panel=lambda: None, show_panel=lambda: shown.append(1))
+        Controller.edit_regions(c)
+        assert panel.visible is False  # (out of the way while the regions are set)
+        editors[-1].on_saved([SimpleNamespace(id="dialog")])
+        return shown
+
+    assert controller(open_=True) == [1]  # from the window's button: it comes back
+    assert controller(open_=False) == []  # with F10 from the game: it stays in the tray

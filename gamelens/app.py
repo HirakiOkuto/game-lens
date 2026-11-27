@@ -1285,6 +1285,9 @@ class Controller(QObject):
             return
         self.overlay.follow(cr)  # sets the geometry of the game's client area (logical pixels)
         self.overlay.hide()
+        # the window steps aside while the regions are set, and comes back afterwards if it was open (the button in it);
+        # started with F10 from the game, it stays in the tray
+        panel_was_open = self.panel.isVisible()
         self.panel.hide()
         p = self.profile
         find = (lambda f: self.api.ocr_lines(f, p.src_lang, frame_h=f.shape[0])["lines"]) if self.health else None
@@ -1302,7 +1305,7 @@ class Controller(QObject):
                     self.toast(t("{n} regions saved — translating", n=len(regions)), 3)
             self.editor = None
             self.refresh_panel()
-            if not self.profile.regions:
+            if panel_was_open or not self.profile.regions:
                 self.show_panel()
 
         self.editor.saved.connect(done)

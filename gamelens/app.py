@@ -37,7 +37,7 @@ from .screen import (TextSize, begins, known, marks_unchanged, text_marks, text_
 from .services import HYMT, MODELS, ServerManager, pick_local
 from .ui_style import QSS
 from .speech import fit_speaker, gender_of, genders
-from .watcher import ScreenCalm, SteadyTiles, TextFollower, auto_pause, changed_pixels, plain_text, stroke_change, goes_on, ink_map, similar, stroke_map
+from .watcher import ScreenCalm, SteadyTiles, TextFollower, auto_pause, plain_text, goes_on, ink_map, similar, stroke_map
 
 HK_TOGGLE, HK_SCREEN, HK_REGIONS, HK_HISTORY = 1, 2, 3, 4
 INSTANCE_KEY = os.environ.get("GAMELENS_INSTANCE", "game-lens-ui")  # one running copy per key (tests use their own)
@@ -98,12 +98,13 @@ def create_shortcut(folder: str | None = None) -> str:
     app_icon().pixmap(64, 64).save(str(ico), "ICO")
     exe = ROOT / "game-lens.exe"  # the portable build's launcher
     target, args = (exe, "") if exe.exists() else (ROOT / ".venv" / "Scripts" / "pythonw.exe", "-m gamelens")
-    where = f"'{folder}'" if folder else "[Environment]::GetFolderPath('Desktop')"
+    q = lambda v: "'" + str(v).replace("'", "''") + "'"  # noqa: E731 - a PowerShell string (' doubled)
+    where = q(folder) if folder else "[Environment]::GetFolderPath('Desktop')"
     ps = (
         f"$d={where};"
         "$s=(New-Object -ComObject WScript.Shell).CreateShortcut(\"$d\\game-lens.lnk\");"
-        f"$s.TargetPath='{target}';$s.Arguments='{args}';$s.WorkingDirectory='{ROOT}';"
-        f"$s.IconLocation='{ico}';$s.Description='game-lens';$s.Save()"
+        f"$s.TargetPath={q(target)};$s.Arguments={q(args)};$s.WorkingDirectory={q(ROOT)};"
+        f"$s.IconLocation={q(ico)};$s.Description='game-lens';$s.Save()"
     )
     r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
                        creationflags=0x08000000)
@@ -223,6 +224,7 @@ class Controller(QObject):
         self.next_keys, self.keys_told = 0.0, False  # see keep_english_keys
         self.keys_possible = True
         self.screen_busy = False
+        self.screen_job_gen = 0
         self.screen_engine = ""
         self.next_attach = 0.0
         self.last_error = ("", 0.0)
@@ -429,9 +431,13 @@ class Controller(QObject):
             if not getattr(self, "_keys_loaded", False):
                 self._keys_loaded = True  # first: two polls can overlap while the server is slow to answer
                 self.bridge.keys.emit(self.api.keys())
-                self.sync_glossary()
+            if not getattr(self, "_glossary_synced", False):
+                # (until it has gone through: a server still starting, or restarting, refused it once and the names
+                # were never sent for the rest of the session)
+                self._glossary_synced = True
+                self._glossary_synced = self.sync_glossary()
         except LensError:
-            self._keys_loaded = False
+            self._keys_loaded = self._glossary_synced = False
         self.bridge.status.emit(st)
 
     def fit_speaker(self, payload: dict):
@@ -456,12 +462,13 @@ class Controller(QObject):
             for it in payload.get("items", []):
                 it.text = fit_speaker(it.text, gender)
 
-    def sync_glossary(self):
-        """Names and terms kept in glossaries/<series>.<target>.json go to the server whenever it comes up."""
+    def sync_glossary(self) -> bool:
+        """Names and terms kept in glossaries/<series>.<target>.json go to the server whenever it comes up. False
+        when the server could not take them (they are sent again on the next status check)."""
         p = self.profile
         path = ROOT / "glossaries" / f"{p.series}.{p.target}.json"
         if not path.exists():
-            return
+            return True
         try:
             base = json.loads(path.read_text(encoding="utf-8"))
             current = self.api.glossary(p.series, p.target)
@@ -470,8 +477,13 @@ class Controller(QObject):
                 ver = self.api.put_glossary(p.series, p.target, merged)
                 log.info("glossary %s: %d names, %d terms (version %d)", path.name, len(merged["characters"]),
                          len(merged["terms"]), ver)
-        except (LensError, ValueError, OSError) as e:
+        except LensError as e:
             log.warning("glossary %s not loaded: %s", path.name, e)
+            self._glossary_synced = False  # (whoever asked: the next status check sends it again)
+            return False
+        except (ValueError, OSError) as e:  # (the file itself: sending it again would not help)
+            log.warning("glossary %s not loaded: %s", path.name, e)
+        return True
 
     def on_status(self, st: dict):
         self.health = st["health"]
@@ -706,6 +718,11 @@ class Controller(QObject):
                 self.settings.profile = str(path)
             self.settings.save()
         self.genders = None
+        if self.history.series != self.profile.series:
+            self.history = HistoryLog(ROOT / "logs", self.profile.series)
+            if self.history_win is not None:
+                self.history_win.close()
+                self.history_win = None
         self.shown.clear()
         self.shown_seq.clear()
         self.readings.clear()
@@ -918,7 +935,11 @@ class Controller(QObject):
             return
         prev = self.shown.get(rid)
         if prev and similar(prev["src"], got["text"]) >= 0.92 and not wt.corrected:
-            if prev["items"] and self.overlay.items.get(rid) is not prev["items"]:
+            # (the same words from another speaker - ありがとう - take that speaker's ครับ / ค่ะ)
+            before = [it.text for it in prev["items"] or []]
+            self.fit_speaker(prev)
+            changed = [it.text for it in prev["items"] or []] != before
+            if prev["items"] and (changed or self.overlay.items.get(rid) is not prev["items"]):
                 self.overlay.set_items(rid, prev["items"])
             return
         if prev and not wt.corrected and not goes_on(prev["src"], got["text"]):
@@ -969,7 +990,7 @@ class Controller(QObject):
         self.shown[rid], self.shown_seq[rid] = payload, seq
         self.overlay.set_items(rid, payload["items"])
         if payload["tl"]:
-            e = self.history.add(payload["kind"], payload["src"], payload["tl"], payload["engine"])
+            e = self.history_add(payload["kind"], payload["src"], payload["tl"], payload["engine"])
             if self.history_win:
                 self.history_win.append(e)
             if payload["kind"] not in ("name", "choice", "labels"):
@@ -1000,6 +1021,7 @@ class Controller(QObject):
         self.screen_busy = True
         self.screen_count = 0
         self.screen_gen += 1
+        self.screen_job_gen = self.screen_gen  # the reading that holds screen_busy
         self.screen_ref = ref
         self.screen_frame, self.screen_marks = frame, []
         self.screen_strokes, self.screen_last = stroke_map(frame, "any"), None  # to notice text that appears later
@@ -1059,7 +1081,7 @@ class Controller(QObject):
         self.auto_screen = self.settings.auto_screen = on
         self.settings.save()
         self.auto_done = None
-        if not on:
+        if not on and self.screen_auto:
             self.dismiss_screen()
 
     def job_screen(self, frame: np.ndarray, gen: int, skip: list, auto: bool, deep: bool = True):
@@ -1141,13 +1163,15 @@ class Controller(QObject):
         self.show_screen_items(items)
 
     def on_screen_done(self, gen: int, items):
-        self.screen_busy = False
+        if gen == self.screen_job_gen:  # (a reading given up does not free the one that replaced it)
+            self.screen_busy = False
         self.overlay.set_pending("screen", None)
         if gen != self.screen_gen or self.screen_ref is None:
             return
         if isinstance(items, dict):
             self.show_error(items["error"])
-            self.screen_ref = None
+            self.screen_ref, self.screen_marks = None, []
+            self.overlay.clear("screen")
             self.auto_done = None  # not handled after all: auto mode tries again in a while
             self.auto_still_since = time.monotonic() + 2
             return
@@ -1170,7 +1194,7 @@ class Controller(QObject):
             it._marks = text_marks(self.screen_frame, getattr(it, "_boxes", []), masks=getattr(it, "_masks", None))
         for it in items:  # into the history too: a menu's translation can be corrected there
             if getattr(it, "_src", ""):
-                e = self.history.add("ui", it._src, it.text, self.screen_engine)
+                e = self.history_add("ui", it._src, it.text, self.screen_engine)
                 if self.history_win:
                     self.history_win.append(e)
         # a menu (many labels; or asked for with F9): the regions' own translations would be pieces of it
@@ -1283,6 +1307,9 @@ class Controller(QObject):
 
     def dismiss_screen(self):
         self.screen_ref, self.screen_marks, self.screen_menu = None, [], False
+        # a reading still running is given up with it: its result is dropped (another generation), and a new reading
+        # may start at once - F9 again, or the correction's reading again, did nothing until the old one had finished
+        self.screen_busy = False
         self.screen_gen += 1
         self.overlay.set_pending("screen", None)
         self.overlay.clear("screen")
@@ -1329,6 +1356,13 @@ class Controller(QObject):
         self.editor.show()
         self.editor.activateWindow()
         self.editor.setFocus()
+
+    def history_add(self, kind: str, src: str, tl: str, engine: str) -> dict | None:
+        try:
+            return self.history.add(kind, src, tl, engine)
+        except OSError as e:  # (a full disk, a file another program holds: the translation itself still shows)
+            log.warning("history not written: %s", e)
+            return None
 
     def fix_translation(self, src: str, tl: str, kind: str):
         """A correction from the history window: into the game's glossary file, to the server, and what is on the
@@ -1445,6 +1479,20 @@ def accept_risk() -> bool:
     return True
 
 
+_instance_lock = None  # (held while game-lens runs; Windows lets it go when the process ends, also after a crash)
+
+
+def first_instance() -> bool:
+    """Whether this is the only game-lens running (for INSTANCE_KEY): a named lock in the Windows session."""
+    global _instance_lock
+    import ctypes
+
+    k = ctypes.windll.kernel32
+    k.CreateMutexW.restype = ctypes.c_void_p
+    _instance_lock = k.CreateMutexW(None, False, f"Local\\{INSTANCE_KEY}")
+    return bool(_instance_lock) and k.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+
+
 def main():
     (ROOT / "logs").mkdir(exist_ok=True)
     logging.basicConfig(filename=ROOT / "logs" / "gamelens.log", level=logging.INFO, encoding="utf-8",
@@ -1459,14 +1507,18 @@ def main():
     # one instance: starting game-lens again just brings the running one's window up
     # `python -m gamelens --quit` closes the running one (and the server / model it started)
     command = b"quit" if "--quit" in sys.argv else b"show"
-    sock = QLocalSocket()
-    sock.connectToServer(INSTANCE_KEY)
-    if sock.waitForConnected(1000):
-        sock.write(command)
-        sock.flush()
-        sock.waitForReadyRead(5000)  # the running instance answers "ok" once it has the command
-        return
-    if command == b"quit":
+    # (two launches within a second - a double click twice - both found no running copy and both started, then
+    # fought over the hotkeys. A lock Windows holds for the first one decides; a later one only passes its command on)
+    first = first_instance()
+    for _ in range(1 if first else 20):
+        sock = QLocalSocket()
+        sock.connectToServer(INSTANCE_KEY)
+        if sock.waitForConnected(1000):
+            sock.write(command)
+            sock.flush()
+            sock.waitForReadyRead(5000)  # the running instance answers "ok" once it has the command
+            return
+    if command == b"quit" or not first:
         return
     QLocalServer.removeServer(INSTANCE_KEY)
     server = QLocalServer()

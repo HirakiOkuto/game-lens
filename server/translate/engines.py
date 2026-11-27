@@ -27,12 +27,21 @@ _local = httpx.Client(timeout=120, trust_env=False,
                       limits=httpx.Limits(max_connections=32, max_keepalive_connections=16, keepalive_expiry=4))
 
 
-def http_post(url: str, json, timeout: float = 120):
-    try:
-        return _local.post(url, json=json, timeout=timeout)
-    except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
-        # the server closed the kept connection just as it was used again (or was restarted): once more on a new one
-        return _local.post(url, json=json, timeout=timeout)
+def http_post(url: str, json, timeout: float = 120, loading_wait: float = 60):
+    """POST to a local model server. While llama.cpp is still loading its model it answers 503 "Loading model":
+    the lines read in that time (the first of a session) were lost; now they wait for the model, up to
+    `loading_wait` seconds."""
+    give_up = time.monotonic() + loading_wait
+    while True:
+        try:
+            r = _local.post(url, json=json, timeout=timeout)
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError):
+            # the server closed the kept connection just as it was used again (or was restarted): once more on a new
+            r = _local.post(url, json=json, timeout=timeout)
+        if r.status_code == 503 and b"Loading model" in r.content and time.monotonic() < give_up:
+            time.sleep(0.5)
+            continue
+        return r
 
 
 def http_get(url: str, timeout: float = 5):
@@ -355,7 +364,8 @@ def match_term(text: str, terms: list[tuple[str, str]]) -> tuple[str, str] | Non
         fa = fold_name(a)
         if fa == want:
             return a, b
-        if len(fa) >= 4 and abs(len(fa) - len(want)) <= 1:
+        # (a character more or less only between names of four or more: サクラ is not サクラコ)
+        if min(len(fa), len(want)) >= 4 and abs(len(fa) - len(want)) <= 1:
             r = difflib.SequenceMatcher(None, fa, want, autojunk=False).ratio()
             if r > score:
                 best, score = (a, b), r
@@ -550,8 +560,11 @@ def echo_guard(tl: str, text: str, history: list[tuple[str, str]]) -> str:
     return tl
 
 
+# the model talking instead of translating. (ขออภัย alone is how Thai says 申し訳ありません / すみません, and กรุณาให้ ...
+# is an ordinary request: only with "cannot / translate / the text" are they the model's own words)
 CHATTER = re.compile(
-    r"ขออภัย|ไม่สามารถแปล|กรุณา(ให้|ระบุ)|โปรดระบุ|ข้อความที่คุณต้องการ|I'm sorry|I cannot|I can't translate|please provide",
+    r"ขออภัย.{0,30}(ไม่สามารถ|แปล|ข้อความ)|ไม่สามารถแปล|กรุณา(ระบุ|ให้ข้อความ)|โปรดระบุ|ข้อความที่คุณต้องการ"
+    r"|I'm sorry|I cannot|I can't translate|please provide",
     re.IGNORECASE,
 )
 
@@ -562,7 +575,7 @@ def drop_untranslated(out: dict[str, str], blocks: list[dict]) -> dict[str, str]
     return {i: ("" if t and re.sub(r"\W", "", t).lower() == src.get(i) else t) for i, t in out.items()}
 
 
-def clean_mt(text: str, target: str) -> str:
+def clean_mt(text: str, target: str, source: str = "") -> str:
     """Tidy sentence-level MT output for a speech bubble.
 
     Translation models fed OCR garbage or a lone syllable sometimes answer like an assistant ("Sorry, I cannot
@@ -573,8 +586,10 @@ def clean_mt(text: str, target: str) -> str:
         return ""  # an apology or request is never a translation of a bubble
     t = re.sub(r"\s*\((เลือก|choose|depending)[^)]*\)", "", t)  # "(เลือกตามเพศของผู้พูด)"
     t = re.sub(r"(ค่ะ|คะ|ครับ)\s*/\s*(ค่ะ|คะ|ครับ)", r"\1", t)  # keep one politeness ending
-    # alternatives "A / B", "A | B", "A /\nB", trailing "A /": keep the first
-    t = re.split(r"\s+[/|¦]\s+|\s*[/|¦]\s*(?:\n|$)", t)[0]
+    # alternatives "A / B", "A | B", "A /\nB", trailing "A /": keep the first. (Unless the source has a slash itself:
+    # "5 / 30", "HP / MP", "はい / いいえ" were cut to their first part)
+    if not re.search(r"[/／|｜]", source):
+        t = re.split(r"\s+[/|¦]\s+|\s*[/|¦]\s*(?:\n|$)", t)[0]
     t = re.sub(r"\s*\((ขึ้นอยู่กับ|หรือ อาจ|or )[^)]*\)", "", t)  # "(ขึ้นอยู่กับเพศของผู้พูด)", "(หรือ อาจหมายถึง ...)"
     t = t.replace("。", "").replace("؟", "?").rstrip("|").strip()
     if target == "th":
@@ -686,7 +701,9 @@ def _translate_blocks(
 
     Tries the preferred engine, retries once on a bad/incomplete answer, then falls back to cloud if allowed.
     """
-    todo = [b for b in blocks if b["src"].strip() and not NOISE_RE.fullmatch(b["src"].strip())]
+    # (a letter or two is OCR noise in a Japanese, Chinese or Korean game; in an English one it is "No", "OK", "Go")
+    noise = NOISE_RE if src.split("-")[0] in ("ja", "zh", "ko") else None
+    todo = [b for b in blocks if b["src"].strip() and not (noise and noise.fullmatch(b["src"].strip()))]
     if not todo:
         return {}, "none", {}
     if game:
@@ -709,7 +726,7 @@ def _translate_blocks(
             except EngineError as e:
                 errors.append(f"{name}: {e}")
                 continue
-            out = drop_untranslated({b["id"]: clean_mt(t, target) for b, t in zip(todo, tls)}, todo)
+            out = drop_untranslated({b["id"]: clean_mt(t, target, b["src"]) for b, t in zip(todo, tls)}, todo)
             ms = round((time.perf_counter() - t0) * 1000)
             return out, name, {"ms": ms, "missing": [], "jaLeaked": [i for i, t in out.items() if leak and leak.search(t)], "errors": errors}
         if name in MT:
@@ -719,7 +736,7 @@ def _translate_blocks(
             except EngineError as e:
                 errors.append(f"{name}: {e}")
                 continue
-            out = drop_untranslated({b["id"]: clean_mt(t, target) for b, t in zip(todo, tls)}, todo)
+            out = drop_untranslated({b["id"]: clean_mt(t, target, b["src"]) for b, t in zip(todo, tls)}, todo)
             ms = round((time.perf_counter() - t0) * 1000)
             return out, name, {"ms": ms, "missing": [], "jaLeaked": [i for i, t in out.items() if leak and leak.search(t)], "errors": errors}
         for attempt in range(2):

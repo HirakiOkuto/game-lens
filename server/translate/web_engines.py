@@ -1,5 +1,5 @@
 """Sentence-level web translation engines: the DeepL API, Azure Translator, and Google's keyless `gtx`
-endpoint (the one LunaTranslator and browser extensions use).
+endpoint (the one browser extensions use).
 
 DeepL API Free (500k characters/month) and Azure Translator F0 (2M characters/month) are free with a key.
 The keyless endpoint is unofficial: it rate-limits per IP (HTTP 429) and can change at any time.
@@ -164,14 +164,14 @@ class _DeepLHttp(EngineError):
 
 # --- Google, keyless (gtx) -------------------------------------------------------------------------------------
 class GoogleFreeEngine:
-    """Google Translate without a key of one's own, the way LunaTranslator does it: the endpoint Chrome's
+    """Google Translate without a key of one's own: the endpoint Chrome's
     "translate this page" uses (translate-pa.googleapis.com, with the API key built into Chrome), every line of a
     page in one request, names locked with translate="no" spans. If that is refused, the older `client=gtx`
     endpoint, one line at a time. Neither is an official API: Google may limit or change them at any time."""
 
     name = "google_free"
     URL = "https://translate-pa.googleapis.com/v1/translateHtml"
-    KEY = "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520"  # Chrome's own (public in Chromium builds and LunaTranslator)
+    KEY = "AIzaSyATBXajvzQLTDHEQbcpq0Ihe0vWDHmO520"  # Chrome's own (public in Chromium builds)
     GTX = "https://translate.googleapis.com/translate_a/single"
     LANGS = {"zh": "zh-CN", "zh-cn": "zh-CN", "zh-hk": "zh-TW", "zh-tw": "zh-TW"}
     UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"

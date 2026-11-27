@@ -672,3 +672,97 @@ def test_google_free_is_no_engine_without_its_key(monkeypatch):
     assert e.available() is False
     with pytest.raises(engines.EngineError):
         e.translate_page(["こんにちは"], "ja", "th", [], {})
+
+
+def test_a_model_still_loading_is_waited_for(monkeypatch):
+    """llama.cpp answers 503 "Loading model" until its model is in: the first lines of a session were lost."""
+    answers = [httpx.Response(503, json={"error": {"message": "Loading model"}})] * 2 + [httpx.Response(200, json={"ok": 1})]
+    calls = []
+    monkeypatch.setattr(engines._local, "post", lambda url, json, timeout: calls.append(url) or answers[len(calls) - 1])
+    monkeypatch.setattr(engines.time, "sleep", lambda s: None)
+    assert engines.http_post("http://x/completion", {}).status_code == 200 and len(calls) == 3
+    # another 503 (a full queue) or a model that never loads comes back as it is
+    calls.clear()
+    answers[:] = [httpx.Response(503, text="busy")]
+    assert engines.http_post("http://x/completion", {}).status_code == 503 and len(calls) == 1
+    calls.clear()
+    answers[:] = [httpx.Response(503, json={"error": {"message": "Loading model"}})] * 5
+    assert engines.http_post("http://x/completion", {}, loading_wait=0).status_code == 503 and len(calls) == 1
+
+
+def test_review_fixes_ocr_and_mt_cleanup():
+    """Defects found by the code review (2026-11-27), each as it was seen."""
+    import ocr
+
+    # the kanji 一 of 一つ / 一か月 is not a long vowel (アイテムを一つ became アイテムをーつ); ー misread as 一 still is
+    assert ocr.fix_kana("アイテムを一つ手に入れた") == "アイテムを一つ手に入れた" and ocr.fix_kana("この一か月") == "この一か月"
+    assert ocr.fix_kana("ステ一ジ") == "ステージ" and ocr.fix_kana("すご一い！") == "すごーい！"
+    # ขออภัย is how Thai says sorry; only the model's own refusal is dropped
+    assert engines.clean_mt("ขออภัย ฉันมาสาย", "th", "遅れてすみません") == "ขออภัย ฉันมาสาย"
+    assert engines.clean_mt("ขออภัย ฉันไม่สามารถแปลข้อความนี้ได้", "th", "x") == ""
+    # a slash the source has itself stays ("5 / 30" was cut to "5"); alternatives the model added are still cut
+    assert engines.clean_mt("5 / 30", "th", "5 / 30") == "5 / 30"
+    assert engines.clean_mt("ไปกัน / ไปเถอะ", "th", "行こう") == "ไปกัน"
+    # サクラ is not サクラコ; a misread of a long name still is it
+    assert engines.match_term("サクラ", [("サクラコ", "Sakurako")]) is None
+    assert engines.match_term("フアランタ", [("ファランタ", "Faridah")]) == ("ファランタ", "Faridah")
+
+
+def test_review_fixes_translate_cache(monkeypatch, tmp_path):
+    """Lines of two games no longer share a cache entry; an empty answer is not kept; a name the engine gave none
+    for is not asked for again and again; a learned name never wins over a term of the glossary."""
+    app_mod, client, h = _client(monkeypatch, tmp_path)
+    calls = []
+
+    def fake_blocks(blocks, glossary, ctx, engine, allow_cloud, novel, src, target, game):
+        calls.append((target, [b["src"] for b in blocks]))
+        if target == "en":
+            return {b["id"]: "the old man" for b in blocks}, "local", {}
+        who = (glossary.get("characters") or [{}])[0].get("tl", "")
+        return {b["id"]: ("" if b["src"] == "空" else b["src"] + "-" + who) for b in blocks}, "local", {}
+
+    monkeypatch.setattr(app_mod, "translate_blocks", fake_blocks)
+    for s, name in (("a", "Alice"), ("b", "Bob")):
+        client.put(f"/glossary/{s}?target=th", json={"characters": [{"src": "ネコ", "tl": name}], "terms": []}, headers=h)
+    req = {"engine": "local", "lines": [{"id": "x", "src": "こんにちは", "kind": "dialog"}]}
+    ra = client.post("/translate/lines", json={**req, "series": "a"}, headers=h).json()["lines"]["x"]
+    rb = client.post("/translate/lines", json={**req, "series": "b"}, headers=h).json()["lines"]["x"]
+    assert ra.endswith("Alice") and rb.endswith("Bob")
+    calls.clear()
+    empty = {**req, "series": "a", "lines": [{"id": "x", "src": "空", "kind": "dialog"}]}
+    client.post("/translate/lines", json=empty, headers=h)
+    client.post("/translate/lines", json=empty, headers=h)
+    assert len(calls) == 2  # (asked again: an empty answer was not cached)
+    # no name from the engine: asked once, not on every request
+    calls.clear()
+    nm = {**req, "series": "a", "lines": [{"id": "n", "src": "オジサン", "kind": "name"}]}
+    client.post("/translate/lines", json=nm, headers=h)
+    client.post("/translate/lines", json=nm, headers=h)
+    assert sum(1 for t, _ in calls if t == "en") == 1
+    # a term of the glossary wins over a learned name for the same text
+    g = app_mod.with_learned({"characters": [], "terms": [{"src": "ジャベリン", "tl": "จาเวลิน"}]}, [("ジャベリン", "Javelin")])
+    assert g["characters"] == []
+
+
+def test_review_fixes_latin_games_short_words(monkeypatch):
+    """In an English game "OK", "No", "Go" are words; in a Japanese one two Latin letters are OCR noise."""
+    seen = []
+
+    class E:
+        name = "local"
+
+        def available(self):
+            return True
+
+        def translate_page(self, texts, *a, **k):
+            seen.extend(texts)
+            return ["ตกลง"] * len(texts)
+
+    monkeypatch.setattr(engines, "engine_order", lambda pref, cloud: (["local"], None))
+    monkeypatch.setattr(engines, "get_engine", lambda n: E())
+    blocks = [{"id": "a", "src": "OK", "kind": "ui"}]
+    engines.translate_blocks(blocks, {}, [], "local", False, False, "en", "th", True)
+    assert seen == ["OK"]
+    seen.clear()
+    engines.translate_blocks(blocks, {}, [], "local", False, False, "ja", "th", True)
+    assert seen == []

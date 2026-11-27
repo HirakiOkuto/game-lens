@@ -7,7 +7,7 @@ import ctypes
 import functools
 import re
 
-ZWSP = "​"
+ZWSP = "\u200b"
 UBRK_LINE = 2
 _THAI = re.compile(r"[฀-๿]")
 _THAI_CHARS = set(map(chr, range(0x0E00, 0x0E80)))
@@ -28,8 +28,14 @@ except (OSError, AttributeError):
 
 def segments(text: str) -> list[str]:
     """Line-break opportunities as a list of pieces (whole text if ICU is unavailable)."""
-    if not text or _icu is None or max(map(ord, text)) > 0xFFFF:  # (ICU counts in UTF-16 units)
+    if not text or _icu is None:
         return [text] if text else []
+    if max(map(ord, text)) > 0xFFFF:  # (ICU counts in UTF-16 units: the runs between such characters, one by one)
+        out = []
+        for run in re.split(r"([\U00010000-\U0010FFFF]+)", text):
+            if run:
+                out += [run] if ord(run[0]) > 0xFFFF else segments(run)
+        return out
     status = ctypes.c_int(0)
     # the iterator reads the text where it lies, while it runs: a buffer of our own that lives until it is closed
     # (a str passed straight in is copied to a temporary that is gone after the call - the breaks came out of

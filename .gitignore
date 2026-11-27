@@ -9,3 +9,5 @@ models/
 build/
 settings.json
 tests/game_data/
+*.bak
+*.tmp

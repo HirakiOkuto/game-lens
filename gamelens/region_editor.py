@@ -360,9 +360,17 @@ class RegionEditor(QWidget):
             r.ink = "any"  # choices are often dark text on light buttons
 
     def _save(self):
+        self._finished = True
         self.saved.emit(self.regions)
         self.close()
 
     def _cancel(self):
+        self._finished = True
         self.cancelled.emit()
         self.close()
+
+    def closeEvent(self, e):
+        if not getattr(self, "_finished", False):  # (Alt+F4, the taskbar: the same as Esc)
+            self._finished = True
+            self.cancelled.emit()
+        super().closeEvent(e)

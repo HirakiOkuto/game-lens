@@ -112,6 +112,10 @@ def port_up(port: int, path: str = "/health") -> bool:
         return False
 
 
+class _WholeAlready(Exception):
+    """A resumed download asked for bytes past the end: the .part file is complete."""
+
+
 class ServerManager:
     def __init__(self, root: Path, log_dir: Path, models_dir: Path | None = None, hymt_size: str = "auto"):
         self.root = Path(root).resolve()
@@ -225,6 +229,8 @@ class ServerManager:
             with httpx.stream("GET", url, headers=headers, follow_redirects=True, timeout=60) as r:
                 if r.status_code == 200:
                     have = 0  # the server sends it all again
+                elif r.status_code == 416 and have:
+                    raise _WholeAlready()
                 elif r.status_code != 206:
                     raise RuntimeError(f"HTTP {r.status_code}")
                 total = have + int(r.headers.get("content-length", 0))
@@ -238,6 +244,9 @@ class ServerManager:
                             shown = pct
                             progress(pct, have, total)
             part.replace(dest)
+            return True
+        except _WholeAlready:
+            part.replace(dest)  # (nothing more to fetch: the file is all there)
             return True
         except (httpx.HTTPError, OSError, RuntimeError) as e:
             say(t("The model download failed ({error}) — open game-lens again to continue, or choose an online translator", error=e))

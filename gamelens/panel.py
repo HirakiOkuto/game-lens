@@ -5,7 +5,7 @@ from __future__ import annotations
 import webbrowser
 
 from PySide6.QtCore import QMargins, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFont, QFontDatabase
+from PySide6.QtGui import QDesktopServices, QFont, QFontDatabase, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFontComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QScrollArea, QSlider, QVBoxLayout, QWidget)
 
@@ -618,6 +618,9 @@ class Panel(QWidget):
             self.save_keys.emit(vals)
 
     def closeEvent(self, e):
+        if QGuiApplication.instance().isSavingSession():  # (Windows signing out or shutting down: let it)
+            e.accept()
+            return
         e.ignore()
         self.hide()
         self.closed.emit()

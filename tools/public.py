@@ -1,7 +1,6 @@
 """What a build leaves out or adds (tools/build_portable.py and tools/make_zip.py use it).
 
-"Google free" uses Google's unofficial endpoints with the API key built into Chrome, as LunaTranslator and others do;
-builds include it. `--no-google-free` makes a build without it: the key taken out of the source and a PUBLIC_BUILD
+"Google free" uses Google's unofficial endpoints with the API key built into Chrome; builds include it. `--no-google-free` makes a build without it: the key taken out of the source and a PUBLIC_BUILD
 file that hides the engine in the app.
 """
 from __future__ import annotations

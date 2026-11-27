@@ -277,7 +277,7 @@ def test_erase_lines_covers_only_the_glyphs():
 
 
 def test_screen_layout_keeps_one_size_and_uses_the_room():
-    from gamelens.screen import common_heights, has_source_text, lines_to_translate, paragraphs, place, screen_items
+    from gamelens.screen import common_heights, has_source_text, lines_to_translate, paragraphs, screen_items
 
     assert has_source_text("画質", "ja") and has_source_text("オリジナル", "ja")
     assert not has_source_text("90FPS", "ja") and not has_source_text("1280×720", "ja") and has_source_text("OFF", "en")
@@ -508,7 +508,7 @@ def test_region_item_for_a_dialogue_box():
 
 
 def test_paragraphs_join_running_text_but_not_list_rows():
-    from gamelens.screen import paragraphs, place_block, requests, screen_items
+    from gamelens.screen import paragraphs, requests, screen_items
 
     # a description of three tightly stacked lines, then list rows spaced a full line apart
     para = [{"id": f"p{i}", "bbox": [80, 100 + i * 27, 380 - i * 40, 20], "text": t}
@@ -1402,3 +1402,154 @@ def test_a_game_without_a_name_box_keeps_its_dialogue_regions():
     assert not Controller.someone_speaking(c)
     c.watchers["n"].last_text = "テララ"
     assert Controller.someone_speaking(c)
+
+
+def test_the_glossary_is_sent_again_until_the_server_takes_it(tmp_path, monkeypatch):
+    """The names went to the server once, on the first status check: a server still starting (or restarting) refused
+    them, and the rest of the session translated names without the glossary."""
+    from types import SimpleNamespace
+
+    import gamelens.app as app_mod
+    from gamelens.api import LensError
+    from gamelens.app import Controller
+
+    (tmp_path / "glossaries").mkdir()
+    (tmp_path / "glossaries" / "g.th.json").write_text('{"characters": [{"src": "テララ", "tl": "Terara"}], "terms": []}',
+                                                      encoding="utf-8")
+    monkeypatch.setattr(app_mod, "ROOT", tmp_path)
+    sent, refuse = [], [True]
+
+    def put(series, target, g):
+        if refuse[0]:
+            raise LensError("Cannot reach the server: [WinError 10061]")
+        sent.append(g)
+        return 1
+
+    c = SimpleNamespace(profile=SimpleNamespace(series="g", target="th", live_engine="index", src_lang="ja"), _warmed=None,
+                        api=SimpleNamespace(health=lambda: {}, keys=lambda: {}, glossary=lambda s, t: {"characters": [], "terms": []},
+                                            put_glossary=put),
+                        bridge=SimpleNamespace(keys=SimpleNamespace(emit=lambda k: None), status=SimpleNamespace(emit=lambda s: None)),
+                        pool=SimpleNamespace(submit=lambda *a: None))
+    c.sync_glossary = lambda: Controller.sync_glossary(c)
+    Controller.poll_status(c)
+    assert sent == [] and c._glossary_synced is False
+    refuse[0] = False
+    Controller.poll_status(c)
+    assert len(sent) == 1 and c._glossary_synced is True
+    Controller.poll_status(c)
+    assert len(sent) == 1  # (once it has gone through, not again every 2 s)
+
+
+def test_review_fixes_endings_names_files_and_layout(tmp_path):
+    """Defects found by the code review (2026-11-27), each as it was seen."""
+    import json as _json
+
+    from gamelens.overlay import fit_lines
+    from gamelens.profile import Settings, read_json, write_safely
+    from gamelens.speech import fit_speaker, gender_of
+
+    # ค่า ends words too: a man's "มีมูลค่า" became "มีมูลครับ", the player's "คุณค่า" lost half of it
+    assert fit_speaker("ของชิ้นนี้มีมูลค่า!", "male") == "ของชิ้นนี้มีมูลค่า!"
+    assert fit_speaker("คุณค่า.", "neutral") == "คุณค่า."
+    assert fit_speaker("ขอบคุณค่ะ!", "male") == "ขอบคุณครับ!"
+    # a name in brackets is still the name
+    assert [gender_of(n, {"アリス": "female"}) for n in ("【アリス】", "アリス（？）", "[アリス]", "ボブ")] == ["female"] * 3 + [""]
+    # a settings file cut short by a crash: the copy before it, or the defaults - never an app that will not start
+    f = tmp_path / "settings.json"
+    write_safely(f, _json.dumps({"ui_lang": "th"}))
+    write_safely(f, _json.dumps({"ui_lang": "th", "toasts": False}))
+    f.write_text('{"ui_la', encoding="utf-8")
+    assert read_json(f) == {"ui_lang": "th"} and Settings.load(f).ui_lang == "th"
+    f.write_text('{"ui_la', encoding="utf-8")
+    (tmp_path / "settings.json.bak").write_text("{", encoding="utf-8")
+    assert Settings.load(f).ui_lang == "en"  # (both broken: the defaults)
+    assert not list(tmp_path.glob("*.tmp"))
+    # a line break in a translation: a space, not two words glued together
+    _, lines, _ = fit_lines("a\nb", "Arial", False, 200, 40, 20)
+    assert [s for s, _ in lines] == ["a b"]
+
+
+def test_review_fixes_screen_reading_given_up_and_failed():
+    """A screen reading that failed left its parts up with nothing watching them; one given up (Esc, F9 again, a
+    correction) held up the next until it finished; turning auto mode off took away a translation asked for with F9."""
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+
+    cleared = []
+    c = SimpleNamespace(screen_gen=3, screen_job_gen=3, screen_busy=True, screen_ref=object(), screen_marks=[1],
+                        overlay=SimpleNamespace(set_pending=lambda *a: None, clear=lambda k: cleared.append(k)),
+                        show_error=lambda e: None, auto_done=1, auto_still_since=0.0)
+    Controller.on_screen_done(c, 3, {"error": "server down"})
+    assert c.screen_busy is False and c.screen_ref is None and c.screen_marks == [] and cleared == ["screen"]
+    # given up: the next reading may start at once, and the old one's end does not free the new one
+    c.screen_busy, c.screen_ref = True, object()
+    Controller.dismiss_screen(c)
+    assert c.screen_busy is False
+    c.screen_busy, c.screen_job_gen, c.screen_gen = True, 5, 5  # (the new reading)
+    Controller.on_screen_done(c, 4, [])
+    assert c.screen_busy is True
+    # auto mode off: an F9 translation stays
+    dismissed = []
+    a = SimpleNamespace(auto_screen=True, settings=SimpleNamespace(auto_screen=True, save=lambda: None), auto_done=1,
+                        screen_auto=False, dismiss_screen=lambda: dismissed.append(1))
+    Controller.set_auto_screen(a, False)
+    assert dismissed == []
+    a.screen_auto = True
+    Controller.set_auto_screen(a, False)
+    assert dismissed == [1]
+
+
+def test_review_fixes_download_already_whole(tmp_path, monkeypatch):
+    """A model download stopped just before its .part file was put in place: the server answers 416 to "the rest",
+    which showed as a failed download on every start."""
+    import gamelens.services as sv
+
+    class R:
+        status_code, headers = 416, {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(sv.httpx, "stream", lambda *a, **k: R())
+    dest = tmp_path / "m.gguf"
+    (tmp_path / "m.gguf.part").write_bytes(b"x" * 10)
+    said = []
+    assert sv.ServerManager._fetch(None, "http://x/m.gguf", dest, lambda *a: None, said.append) is True
+    assert dest.read_bytes() == b"x" * 10 and said == []
+
+
+def test_review_fixes_vertical_label_and_emoji():
+    from gamelens.screen import screen_items
+    from gamelens.thai import ZWSP, breakable
+
+    f = np.full((600, 800, 3), 40, np.uint8)
+    f[100:400, 8:28] = 220
+    it = screen_items(f, [[{"id": "a", "bbox": [5, 100, 25, 300], "text": "ステータス"}]], {"a": "สถานะของตัวละคร"}, 1.0)[0]
+    assert it.angle == 90 and it.rect[2] >= 250  # (down the left edge: its length runs up and down, 27 px before)
+    if thai._icu is not None:
+        assert breakable("😀ฉันไปโรงเรียนทุกวัน").count(ZWSP) >= breakable("ฉันไปโรงเรียนทุกวัน").count(ZWSP)
+
+
+def test_overlay_on_a_second_monitor_with_its_own_scaling(monkeypatch):
+    """A game on a second monitor at 150 %, right of a 100 % main one: Qt keeps that screen's corner where it really
+    is (x 1920) and scales only what lies beyond it. Dividing the whole position put the overlay at x 1333 - on the
+    main monitor. The main monitor alone (corner 0, 0) is placed as before."""
+    from types import SimpleNamespace
+
+    import gamelens.overlay as ov
+
+    o = ov.Overlay("Bai Jamjuree")
+    second = SimpleNamespace(devicePixelRatio=lambda: 1.5)
+    monkeypatch.setattr(ov, "screen_at_physical", lambda x, y: (second, 1920, 0))
+    o.follow((2000, 150, 1500, 900))
+    g = o.geometry()
+    assert (g.x(), g.y(), g.width(), g.height()) == (1973, 100, 1000, 600) and o.dpr == 1.5
+    main = SimpleNamespace(devicePixelRatio=lambda: 1.25)
+    monkeypatch.setattr(ov, "screen_at_physical", lambda x, y: (main, 0, 0))
+    o.follow((100, 50, 1280, 720))
+    g = o.geometry()
+    assert (g.x(), g.y(), g.width(), g.height()) == (80, 40, 1024, 576)

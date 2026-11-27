@@ -22,6 +22,8 @@ concurrency:
 
 jobs:
   release:
+    # (only from the release branch: run by hand on another branch, it would publish that branch and move main to it)
+    if: github.ref == 'refs/heads/release'
     runs-on: windows-latest
     timeout-minutes: 40
     defaults:
@@ -55,11 +57,12 @@ jobs:
         env:
           WANTED: ${{ inputs.version }}
         run: |
-          prev=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          prev=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
           if [ -n "$WANTED" ]; then
             ver="${WANTED#v}"
+            if ! [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::version must be like 1.2.3"; exit 1; fi
           else
-            last="${prev#v}"; last="${last:-0.0.0}"
+            last="${prev#v}"; last="${last%%-*}"; last="${last:-0.0.0}"  # (a tag like v1.1.0-rc1 counts as 1.1.0)
             IFS=. read -r major minor patch <<< "$last"
             ver="$major.$minor.$((patch + 1))"
           fi

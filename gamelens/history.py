@@ -16,6 +16,7 @@ from .i18n import t
 class HistoryLog:
     def __init__(self, folder: Path, series: str):
         folder.mkdir(parents=True, exist_ok=True)
+        self.series = series
         self.path = folder / f"{series}-{time.strftime('%Y%m%d')}.jsonl"
         self.entries: list[dict] = []
         self.seen: set = set()  # menu text read again and again (the same screen) is logged once

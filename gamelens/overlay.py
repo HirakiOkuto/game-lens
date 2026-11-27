@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QGuiApplication, QImage, QPainter, QPainterPath, QPen, QTextLayout, QTextOption, QTransform
 from PySide6.QtWidgets import QWidget
 
@@ -41,7 +41,7 @@ class Item:
 
 def fit_lines(text: str, family: str, bold: bool, w: float, h: float, max_px: float, min_px: float = 9):
     """Largest font size (<= max_px) at which the wrapped text fits w x h. Returns (font, [(line, x_off, width)], line_h)."""
-    text = breakable(text)
+    text = breakable(" ".join(text.split("\n")))
     lo, hi, best = min_px, max(min_px, max_px), None
     for _ in range(9):  # binary search on the pixel size
         px = (lo + hi) / 2
@@ -82,6 +82,16 @@ def _layout(text: str, font: QFont, width: float):
     return out, QFontMetricsF(font).lineSpacing(), widest
 
 
+def screen_at_physical(px: int, py: int):
+    """The screen a point in physical pixels is on, and that screen's top-left corner (where Qt keeps it)."""
+    for s in QGuiApplication.screens():
+        g, d = s.geometry(), s.devicePixelRatio()
+        if g.x() <= px < g.x() + g.width() * d and g.y() <= py < g.y() + g.height() * d:
+            return s, g.x(), g.y()
+    s = QGuiApplication.primaryScreen()
+    return s, (s.geometry().x() if s else 0), (s.geometry().y() if s else 0)
+
+
 class Overlay(QWidget):
     def __init__(self, family: str = "Bai Jamjuree"):
         super().__init__(None)
@@ -107,10 +117,11 @@ class Overlay(QWidget):
             return
         self.client = client
         x, y, w, h = client
-        screen = QGuiApplication.screenAt(QRect(x, y, 1, 1).center()) or QGuiApplication.primaryScreen()
-        self.dpr = screen.devicePixelRatio() if screen else 1.0
-        d = self.dpr
-        self.setGeometry(int(x / d), int(y / d), max(1, int(round(w / d))), max(1, int(round(h / d))))
+        screen, ox, oy = screen_at_physical(x + w // 2, y + h // 2)
+        self.dpr = d = screen.devicePixelRatio() if screen else 1.0
+        # (each screen's corner is where it really is; only what lies beyond it is scaled - the same as x / d for the
+        # main screen, whose corner is 0, 0)
+        self.setGeometry(int(ox + (x - ox) / d), int(oy + (y - oy) / d), max(1, int(round(w / d))), max(1, int(round(h / d))))
         self.update()
 
     # --- content ----------------------------------------------------------------------------------------------

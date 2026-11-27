@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 # languages a game can be in (code for the server, name in the window)
@@ -40,6 +43,34 @@ ENGINES = {e["key"]: e["name"] for e in ENGINE_INFO}
 REMOTE = {"google_free", "google", "deepl", "azure", "cloud"}
 
 
+def write_safely(path: Path, text: str):
+    """Write a file whole or not at all: to a temporary file first, then put in place (a crash or power cut while
+    saving left half a settings or profile file, and game-lens then would not start at all). The file it replaces is
+    kept as <name>.bak."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    if path.exists():
+        try:
+            path.replace(path.with_name(path.name + ".bak"))
+        except OSError:
+            pass
+    tmp.replace(path)
+
+
+def read_json(path: Path) -> dict:
+    """A JSON file, or its .bak when the file itself is broken (ValueError when both are)."""
+    path = Path(path)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        bak = path.with_name(path.name + ".bak")
+        if not bak.exists():
+            raise
+        log.warning("%s is broken: using %s", path.name, bak.name)
+        return json.loads(bak.read_text(encoding="utf-8"))
+
+
 @dataclass
 class Region:
     id: str
@@ -69,8 +100,9 @@ class Profile:
 
     @classmethod
     def load(cls, path: Path) -> "Profile":
-        d = json.loads(Path(path).read_text(encoding="utf-8"))
-        d["regions"] = [Region(**r) for r in d.get("regions", [])]
+        d = read_json(path)
+        fields = Region.__dataclass_fields__  # (a key from a newer version is left out, not an error)
+        d["regions"] = [Region(**{k: v for k, v in r.items() if k in fields}) for r in d.get("regions", [])]
         d.pop("path", None)
         d.pop("live_engine", None)
         p = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
@@ -81,7 +113,7 @@ class Profile:
         d = asdict(self)
         d.pop("path")
         d.pop("live_engine")
-        Path(self.path).write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_safely(Path(self.path), json.dumps(d, ensure_ascii=False, indent=2))
 
 
 def guess_lang(text: str, default: str = "ja") -> str:
@@ -150,17 +182,23 @@ class Settings:
     # of a Thai layout as a box they have no letter for)
 
     def save(self, path: Path = ROOT / "settings.json"):
-        path.write_text(json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8")
+        write_safely(path, json.dumps(asdict(self), ensure_ascii=False, indent=2))
 
     @classmethod
     def load(cls, path: Path = ROOT / "settings.json") -> "Settings":
         if not path.exists():
             s = cls()
-            path.write_text(json.dumps(asdict(s), ensure_ascii=False, indent=2), encoding="utf-8")
-            return s
-        d = json.loads(path.read_text(encoding="utf-8"))
-        s = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
-        s.server = os.environ.get("GAMELENS_SERVER", s.server)  # tests and tools can point at another server
+            s.save(path)
+        else:
+            try:
+                d = read_json(path)
+                s = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+            except (ValueError, OSError) as e:  # broken, and no good copy: start again from the defaults
+                log.warning("%s cannot be read (%s): starting from the defaults", path.name, e)
+                s = cls()
+                s.save(path)
+        # tests and tools can point at another server (also on a first start, before there is a settings file)
+        s.server = os.environ.get("GAMELENS_SERVER", s.server)
         return s
 
     def resolve(self, rel: str) -> Path:

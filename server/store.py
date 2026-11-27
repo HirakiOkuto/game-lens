@@ -23,7 +23,7 @@ class Store:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.executescript(SCHEMA)
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()  # (re-entrant: a read-then-write holds it across both)
 
     def _q(self, sql, args=()):
         with self.lock:
@@ -59,12 +59,13 @@ class Store:
         return (r[0][0], json.loads(r[0][1])) if r else (0, {"characters": [], "terms": []})
 
     def put_glossary(self, series_key: str, glossary: dict) -> int:
-        ver, _ = self.get_glossary(series_key)
-        self._q(
-            "INSERT OR REPLACE INTO glossaries VALUES (?,?,?,?)",
-            (series_key, ver + 1, json.dumps(glossary, ensure_ascii=False), time.time()),
-        )
-        return ver + 1
+        with self.lock:
+            ver, _ = self.get_glossary(series_key)
+            self._q(
+                "INSERT OR REPLACE INTO glossaries VALUES (?,?,?,?)",
+                (series_key, ver + 1, json.dumps(glossary, ensure_ascii=False), time.time()),
+            )
+            return ver + 1
 
     # names of speakers the glossary does not have, as the engine wrote them in Latin letters the first time: kept
     # apart from the glossary (whose version keys the cache), so learning one does not throw the cache away

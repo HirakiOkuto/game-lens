@@ -179,17 +179,23 @@ LATIN_NAME_RE = re.compile(r"^[A-Z][A-Za-z'’-]*( [A-Z][A-Za-z'’-]*){0,2}$") 
 
 
 def with_learned(glossary: dict, learned: list[tuple[str, str]]) -> dict:
-    """The glossary with the speaker names learned so far; the glossary's own entry wins (a correction)."""
+    """The glossary with the speaker names learned so far; the glossary's own entry wins (a correction), a term too."""
     have = {c.get("src") for c in glossary.get("characters", [])} | {a for c in glossary.get("characters", []) for a in c.get("aliases", [])}
+    have |= {x.get("src") for x in glossary.get("terms", [])}
     extra = [{"src": s, "tl": t, "source": "learned"} for s, t in learned if s not in have]
     return {**glossary, "characters": list(glossary.get("characters", [])) + extra} if extra else glossary
 
 
-def line_key(src: str, kind: str, text: str) -> str:
+NOT_A_NAME: set[tuple[str, str]] = set()  # (glossary key, text) the engine gave no name for: not asked again
+
+
+def line_key(src: str, kind: str, text: str, series: str = "") -> str:
     # menu text is cached under "ui3": translations made while the labels before one were its context (which
     # copied their translations into it), or with the note for spoken dialogue (which added to descriptions),
     # are not used any more
-    return hashlib.sha1(f"{src}|{'ui3' if kind == 'ui' else kind}|{text}".encode()).hexdigest()
+    # (and per game: the same line in two games has each game's names and terms in it)
+    kind = "ui3" if kind == "ui" else kind
+    return hashlib.sha1((f"{src}|{kind}|{text}" + (f"|{series}" if series else "")).encode()).hexdigest()
 
 
 class WarmReq(BaseModel):
@@ -271,13 +277,14 @@ async def translate_lines(req: TranslateLinesReq):
     gver, glossary = store.get_glossary(gkey) if req.series else (0, {})
     if req.series:
         glossary = with_learned(glossary, store.get_learned(gkey))
-    keys = {l.id: line_key(src, l.kind, l.src.strip()) for l in req.lines}
+    keys = {l.id: line_key(src, l.kind, l.src.strip(), gkey) for l in req.lines}
     cached = store.get_lines(sorted(set(keys.values())), req.target, gver, req.engine)
     masked = {l.id: mask_numbers(l.src.strip()) for l in req.lines if l.kind == "ui"}
-    pkeys = {i: line_key(src, "ui#n", m) for i, (m, nums) in masked.items() if nums and keys[i] not in cached}
+    pkeys = {i: line_key(src, "ui#n", m, gkey) for i, (m, nums) in masked.items() if nums and keys[i] not in cached}
     patterns = store.get_lines(sorted(set(pkeys.values())), req.target, gver, req.engine) if pkeys else {}
     # an earlier fallback is cached under the requested engine; retry once that engine is usable again
     remote_ok = req.engine in REMOTE and req.allow_cloud and get_engine(req.engine).available()
+    local_ok = None  # (a local engine that failed once - loading, a timeout - is asked again once it is up)
     out: dict[str, str] = {}
     from_cache, todo, engines_used = [], [], []
     names = glossary_terms(glossary)
@@ -285,7 +292,8 @@ async def translate_lines(req: TranslateLinesReq):
         # a speaker the glossary does not have: written in Latin letters like the known names (the official Thai
         # site keeps them so), not made Thai by the engine - which did it differently line to line (シフォン came
         # out ซิฟอน and ชีฟอง) and translated some (ジャベリン became หอกยาว, "spear"). Asked once, then known
-        new = [l for l in req.lines if l.kind == "name" and NAME_RE.match(l.src.strip()) and not match_name(l.src.strip(), names)]
+        new = [l for l in req.lines if l.kind == "name" and NAME_RE.match(l.src.strip()) and not match_name(l.src.strip(), names)
+               and (gkey, l.src.strip()) not in NOT_A_NAME]
         if new:
             try:
                 en, _, _ = await run_in_thread(translate_blocks, [{"id": l.id, "src": l.src.strip(), "kind": "name"} for l in new],
@@ -294,10 +302,13 @@ async def translate_lines(req: TranslateLinesReq):
                 en = {}
             for l in new:
                 tl = (en.get(l.id) or "").strip().strip("\"'.。「」")
-                if LATIN_NAME_RE.match(tl):
-                    store.put_learned(gkey, l.src.strip(), tl)
-                    names.append((l.src.strip(), tl))
-                    glossary.setdefault("characters", []).append({"src": l.src.strip(), "tl": tl, "source": "learned"})
+                if not LATIN_NAME_RE.match(tl):
+                    if l.id in en:  # (the engine answered, with no name: not asked again for it)
+                        NOT_A_NAME.add((gkey, l.src.strip()))
+                    continue
+                store.put_learned(gkey, l.src.strip(), tl)
+                names.append((l.src.strip(), tl))
+                glossary.setdefault("characters", []).append({"src": l.src.strip(), "tl": tl, "source": "learned"})
     for l in req.lines:
         text = l.src.strip()
         if not text or src.split("-")[0] == req.target or already_in(text, req.target, src):
@@ -311,7 +322,12 @@ async def translate_lines(req: TranslateLinesReq):
             engines_used.append("glossary")
             continue
         hit = cached.get(keys[l.id])
-        if hit and not (hit[0] not in (req.engine, "none") and remote_ok):
+        fallback = hit and hit[0] not in (req.engine, "none")
+        if fallback and not remote_ok and req.engine not in REMOTE:
+            if local_ok is None:
+                local_ok = get_engine(req.engine).available()
+            fallback = local_ok
+        if hit and not (fallback and (remote_ok or local_ok)):
             out[l.id] = hit[1]
             from_cache.append(l.id)
             engines_used.append(hit[0])
@@ -335,7 +351,8 @@ async def translate_lines(req: TranslateLinesReq):
             raise HTTPException(503, f"translation failed: {e}")
         for b in todo:
             out[b["id"]] = tl.get(b["id"], "")
-        store.put_lines([(keys[b["id"]], tl[b["id"]]) for b in todo if b["id"] in tl], req.target, gver, req.engine, used)
+        # (not an empty answer: a model's slip would come back for the line from then on)
+        store.put_lines([(keys[b["id"]], tl[b["id"]]) for b in todo if tl.get(b["id"])], req.target, gver, req.engine, used)
         new = [(pkeys[b["id"]], p) for b in todo if b["id"] in pkeys and tl.get(b["id"])
                and (p := make_pattern(masked[b["id"]][1], tl[b["id"]]))]
         if new:

@@ -39,5 +39,7 @@ def add_correction(path: Path, src: str, tl: str, kind: str) -> dict:
         else:
             chars.append({"src": src, "aliases": [], "tl": tl, "gender": gender, "role": "", "source": "user"})
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(dump_glossary(d).encode("utf-8"))
+    from .profile import write_safely
+
+    write_safely(path, dump_glossary(d))
     return d

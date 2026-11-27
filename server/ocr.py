@@ -233,7 +233,8 @@ def _drop_icon(img: np.ndarray, line: dict) -> dict:
 
 _KATA = r"[ァ-ヺー]"
 _FIXES = [  # look-alikes the recogniser mixes up, decided by their neighbours
-    (re.compile(r"(?<=[ぁ-ゖァ-ヺ])[一—―](?=[ぁ-ゖァ-ヺ、。！？!?～〜…])"), "ー"),
+    # (not the kanji 一 of 一つ / 一か月: を一つ, もう一つ, この一か月 came out をーつ, もうーつ, このーか月)
+    (re.compile(r"(?<=[ぁ-ゖァ-ヺ])[一—―](?=(?![つか])[ぁ-ゖァ-ヺ、。！？!?～〜…])"), "ー"),
     (re.compile(rf"(?<={_KATA})べ|べ(?={_KATA})"), "ベ"),
     (re.compile(rf"(?<={_KATA})ぺ|ぺ(?={_KATA})"), "ペ"),
     (re.compile(rf"(?<={_KATA})へ(?={_KATA})"), "ヘ"),
@@ -472,7 +473,8 @@ def read_dialog(img: np.ndarray, lang: str, centred: bool, has_text) -> list[dic
         # a word or two (うん。 응.): the detector can miss a lone glyph, or half of it; bigger, it finds it
         k = 1.5
         big = read_lines(cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_CUBIC), lang)
-        big = good([dict(l, bbox=[round(v / k) for v in l["bbox"]], dbox=[round(v / k) for v in l["dbox"]]) for l in big])
+        big = good([dict(l, bbox=[round(v / k) for v in l["bbox"]], dbox=[round(v / k) for v in l["dbox"]],
+                         **{s: round(l[s] / k) for s in ("tw", "th") if s in l}) for l in big])
         best = big if score(big) > 1.03 * score(best) else best
     return best
 
@@ -497,7 +499,8 @@ def read_name(img: np.ndarray, lang: str, find, fold) -> list[dict]:
     if (known := find(readings[0][0])):
         return _named(lines, known)
     for pic in _name_variants(img):
-        ls = [dict(l, bbox=[v // 2 for v in l["bbox"]], dbox=[v // 2 for v in l["dbox"]]) for l in read_lines(pic, lang)]
+        ls = [dict(l, bbox=[v // 2 for v in l["bbox"]], dbox=[v // 2 for v in l["dbox"]],
+                   **{s: l[s] // 2 for s in ("tw", "th") if s in l}) for l in read_lines(pic, lang)]
         text = "".join(l["text"] for l in ls)
         if (known := find(text)):
             return _named(ls, known)

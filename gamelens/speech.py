@@ -26,7 +26,11 @@ def genders(glossary: dict) -> dict[str, str]:
 
 
 def gender_of(speaker: str, known: dict[str, str]) -> str:
-    return known.get(skeleton(speaker or "").lower(), "") if speaker else ""
+    """(the brackets some games put around a name - 【アリス】, [Alice], アリス（？） - are not part of it)"""
+    if not speaker:
+        return ""
+    name = re.sub(r"[【】\[\]「」『』〈〉《》（）()]|[?？]+", "", speaker)
+    return known.get(skeleton(name).lower(), "") or known.get(skeleton(speaker).lower(), "")
 
 
 def fit_speaker(tl: str, gender: str) -> str:
@@ -43,12 +47,13 @@ def fit_speaker(tl: str, gender: str) -> str:
         tl = re.sub("ครับ" + END, particle, tl)
         tl = re.sub(r"(^|[\s\"'「(…])ผม(?!" + "|".join(HAIR) + ")", r"\1ฉัน", tl)
     elif gender == "male":
-        tl = re.sub("(ค่ะ|คะ|ค่า|จ้ะ)" + END, "ครับ", tl)
+        # (not ค่า: it ends words too - มูลค่า, คุ้มค่า, คุณค่า would lose half of them)
+        tl = re.sub("(ค่ะ|คะ|จ้ะ)" + END, "ครับ", tl)
         tl = re.sub(r"(^|[\s\"'「(…])ดิฉัน", r"\1ผม", tl)
     elif gender == "neutral":  # the player's own character, whoever plays it: no ครับ / ค่ะ, and ฉัน for "I"
         if re.fullmatch(r"\s*(ครับผม|ครับ|ค่ะ|คะ)\s*[!.…！。]*\s*", tl):
             return "อืม" + tl.strip().lstrip("ครับผมค่ะคะ")  # a bare "yes"
-        tl = re.sub(r"\s?(ครับผม|ครับ|ค่ะ|คะ|ค่า)" + END, "", tl)
+        tl = re.sub(r"\s?(ครับผม|ครับ|ค่ะ|คะ)" + END, "", tl)
         tl = re.sub(r"(^|[\s\"'「(…])(ผม|ดิฉัน)(?!" + "|".join(HAIR) + ")", r"\1ฉัน", tl)
         tl = re.sub(r" {2,}", " ", tl).strip()
     return tl

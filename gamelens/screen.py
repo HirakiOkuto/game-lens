@@ -303,7 +303,9 @@ def screen_items(frame: np.ndarray, groups: list[list[dict]], translations: dict
             # along the original's own slant, around its middle; as long as the original or the translation needs
             cx, cy = own[0] + own[2] / 2, own[1] + own[3] / 2
             need = 0.55 * size * sum(c not in THAI_MARKS for c in tl) + 6
-            wide = min(max(t["tw"], need), 1.8 * t["tw"], 2 * min(cx, frame.shape[1] - cx) - 8)  # (longer: smaller letters)
+            steep = abs(t["tilt"]) > 45  # (the length runs up and down: the room for it is up and down too)
+            room = 2 * (min(cy, frame.shape[0] - cy) if steep else min(cx, frame.shape[1] - cx)) - 8
+            wide = max(8.0, min(max(t["tw"], need), 1.8 * t["tw"], room))  # (longer: smaller letters)
             tall = max(1.9 * gh, 1.6 * size)
             rect, align = (int(cx - wide / 2), int(cy - tall / 2), int(wide), int(tall)), "center"
         elif len(looks) == 1:

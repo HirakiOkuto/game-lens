@@ -1215,14 +1215,14 @@ def test_a_title_read_differently_each_look_does_not_reread_the_screen_forever()
     Controller.job_recheck(c, frame, 1)
     assert sent == [["真紅"], ["新しい報酬"]]  # text that really is new still counts
 
-    # what set off a reading is remembered for this screen, and a screen is read again so at most twice
+    # what set off a reading is remembered for this screen, and waits for that reading to say whether it was there
     started = []
     m = SimpleNamespace(screen_gen=5, screen_ref=object(), screen_busy=False, screen_auto=True, screen_menu=True,
-                        screen_tried=[], screen_more_n=0, screen_marks=[],
+                        screen_tried=[], screen_more_n=0, screen_pending=[], screen_marks=[],
                         cap=SimpleNamespace(client_frame=lambda: (frame, None)),
                         start_screen=lambda *a, **k: started.append(k))
     Controller.on_screen_more(m, 5, ["真紅"])
-    assert m.screen_tried == ["真紅"] and m.screen_more_n == 1 and started[-1]["more"] is True
+    assert m.screen_tried == ["真紅"] and m.screen_pending == ["真紅"] and started[-1]["more"] is True
 
 
 def test_auto_mode_backs_off_on_a_slowly_changing_scene():
@@ -1347,3 +1347,49 @@ def test_the_window_comes_back_after_the_regions_are_set_from_it(monkeypatch):
 
     assert controller(open_=True) == [1]  # from the window's button: it comes back
     assert controller(open_=False) == []  # with F10 from the game: it stays in the tray
+
+
+def test_looks_at_a_screen_slow_down_for_misreadings_but_never_stop():
+    """A novel's page fills paragraph by paragraph: each new one is found by the looks every few seconds. They had
+    been cut off after two readings (against misreadings of a list's half-hidden row) and the page was never read
+    again. Now a reading that finds the new text keeps the looks every 3 s; one that does not slows them, to 24 s."""
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+
+    frame = np.zeros((60, 100, 3), np.uint8)
+    pages = iter([[], ["The bell rang."], []])  # what each reading finds
+    done = []
+    c = SimpleNamespace(profile=SimpleNamespace(src_lang="en", font_scale=1.0), screen_gen=1, screen_pending=[],
+                        screen_more_n=0, screen_tried=[], screen_read=[], screen_count=0,
+                        api=SimpleNamespace(ocr_lines=lambda *a, **k: {"lines": [
+                            {"id": "l0", "text": t, "bbox": [5, 5, 80, 14], "conf": 0.99} for t in next(pages)]}),
+                        bridge=SimpleNamespace(screen_done=SimpleNamespace(emit=lambda gen, items: done.append(items))),
+                        translate_in_parts=lambda *a: {"lines": {}, "engine": "x"})
+    c.recheck_gap = lambda: Controller.recheck_gap(c)
+    for found, gap in ((False, 6.0), (True, 3.0), (False, 6.0)):
+        c.screen_pending = ["The bell rang."]
+        Controller.job_screen(c, frame, 1, [], True)
+        assert c.screen_pending == [] and c.recheck_gap() == gap, (found, c.screen_more_n)
+    c.screen_more_n = 50
+    assert c.recheck_gap() == 24.0  # (and never more)
+
+
+def test_a_game_without_a_name_box_keeps_its_dialogue_regions():
+    """A novel's narration has no speaker name: text in a dialogue region now counts as someone speaking, so the
+    screen translation leaves it to the regions instead of taking the page over as a "menu" and pausing them."""
+    from types import SimpleNamespace
+
+    from gamelens.app import Controller
+
+    regions = [SimpleNamespace(id="a", kind="dialog")]
+    c = SimpleNamespace(profile=SimpleNamespace(regions=regions), watchers={"a": SimpleNamespace(last_text="It was a winter's day")})
+    assert Controller.someone_speaking(c)
+    c.watchers["a"].last_text = ""
+    assert not Controller.someone_speaking(c)
+    # with a name box (Azur Promilia), a name is still needed
+    c.profile.regions = regions + [SimpleNamespace(id="n", kind="name")]
+    c.watchers = {"a": SimpleNamespace(last_text="おはよう"), "n": SimpleNamespace(last_text="")}
+    assert not Controller.someone_speaking(c)
+    c.watchers["n"].last_text = "テララ"
+    assert Controller.someone_speaking(c)

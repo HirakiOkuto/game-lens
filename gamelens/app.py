@@ -211,7 +211,11 @@ class Controller(QObject):
         # what looks at this screen found that a reading then did not (a title half under the list's fading edge is
         # read now whole, now in part, now not at all): known, so it does not set off a reading again, and again
         self.screen_tried: list[str] = []
-        self.screen_more_n = 0  # readings set off by a look at this screen
+        # looks whose "new" text the reading they set off did not find (misreadings of text half out of sight): the
+        # looks then come less often, 3 s -> 6 -> 12 -> 24 s; text a reading did find (a novel's next paragraph)
+        # brings them back to every 3 s
+        self.screen_more_n = 0
+        self.screen_pending: list[str] = []  # the "new" text of the last look, until the reading it set off is done
         self.recheck_at, self.rechecking = 0.0, False
         self.screen_menu = False  # the screen translation is of a menu: the regions keep quiet meanwhile
         self.screen_auto = False
@@ -798,6 +802,10 @@ class Controller(QObject):
         def has(kind, short=False):
             return any(r.kind == kind and (w := self.watchers.get(r.id)) and w.last_text
                        and (not short or len(plain_text(w.last_text).strip("【】[]")) <= 10) for r in self.profile.regions)
+        if not any(r.kind == "name" for r in self.profile.regions):
+            # a game with no name box (a novel's narration filling the page): text in a dialogue region is enough,
+            # or the screen translation took that text over as a "menu" and paused the regions
+            return has("dialog") or has("subtitle")
         return has("name", short=True) and (has("dialog") or has("subtitle"))
 
     def reset_watchers_keep_overlay(self):
@@ -987,7 +995,7 @@ class Controller(QObject):
         if self.screen_busy:
             return
         if not more:
-            self.screen_tried, self.screen_more_n = [], 0
+            self.screen_tried, self.screen_more_n, self.screen_pending = [], 0, []
         self.screen_auto = auto
         self.screen_busy = True
         self.screen_count = 0
@@ -1061,8 +1069,13 @@ class Controller(QObject):
             lines = lines_to_translate(ocr["lines"], skip, p.src_lang)
             log.info("screen%s: %d lines", " (auto)" if auto else "", len(lines))
             if gen == self.screen_gen:
-                self.screen_read = [l["text"] for l in lines] + self.screen_tried
-                self.recheck_at = time.monotonic() + 3
+                read = [l["text"] for l in lines]
+                if self.screen_pending:
+                    found = any(known(t, read) for t in self.screen_pending)
+                    self.screen_more_n = 0 if found else self.screen_more_n + 1
+                    self.screen_pending = []
+                self.screen_read = read + self.screen_tried
+                self.recheck_at = time.monotonic() + self.recheck_gap()
             if not lines:
                 self.bridge.screen_done.emit(gen, None if auto else [])
                 return
@@ -1198,11 +1211,11 @@ class Controller(QObject):
                 self.screen_ref, self.screen_marks = None, []
                 self.screen_menu = menu
                 self.start_screen(frame, ink_map(frame, "any"), auto=auto, regions=not menu)
-            elif not self.screen_busy and not self.rechecking and time.monotonic() > self.recheck_at                     and self.screen_more_n < 2:
+            elif not self.screen_busy and not self.rechecking and time.monotonic() > self.recheck_at:
                 # small new text (a panel's "no items", a label that appears) changes too little of the screen to be
                 # seen in its strokes: every few seconds the screen is read again, which on the graphics card is
                 # quick, and only text it did not have before counts
-                self.rechecking, self.recheck_at = True, time.monotonic() + 3
+                self.rechecking, self.recheck_at = True, time.monotonic() + self.recheck_gap()
                 self.pool.submit(self.job_recheck, frame.copy(), self.screen_gen)
             return
         # still being read: only a quite different screen counts (its text, not a background that moves). The
@@ -1212,6 +1225,9 @@ class Controller(QObject):
         if float(np.abs(thumbnail(frame) - self.screen_thumb).mean()) > 22:
             self.dismiss_screen()
             self.auto_done = None
+
+    def recheck_gap(self) -> float:
+        return 3.0 * 2 ** min(self.screen_more_n, 3)
 
     def job_recheck(self, frame: np.ndarray, gen: int):
         try:
@@ -1234,7 +1250,7 @@ class Controller(QObject):
             return
         log.info("screen: new text %s", new[:3])
         self.screen_tried += new
-        self.screen_more_n += 1
+        self.screen_pending = list(new)
         auto, menu = self.screen_auto, self.screen_menu
         self.screen_gen += 1
         self.screen_ref, self.screen_marks = None, []

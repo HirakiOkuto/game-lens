@@ -224,7 +224,13 @@ $env:GAMELENS_PROFILE = "profiles/fake-game.json"; .venv\Scripts\python.exe -m g
     --region name:center:768,826,384,45 --region dialog:center:307,893,1305,135 --out logs\replay\test
 ```
 
-การสร้างชุดสำหรับเผยแพร่:
+การเผยแพร่รุ่นใหม่ (อัตโนมัติ): งานพัฒนาอยู่ใน branch `dev` และ `main` คือรุ่นที่เผยแพร่ล่าสุด
+เมื่อนำ commit เข้า branch `release` (เช่น `git push origin dev:release`) GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml))
+จะรันชุดทดสอบ สร้างไฟล์ zip ทั้งสองแบบ สร้างหน้า Release รุ่นถัดไป (เช่น v1.0.0 เป็น v1.0.1) พร้อมแนบไฟล์และรายการการเปลี่ยนแปลง
+แล้วเลื่อน `main` ไปยังรุ่นนั้น หากต้องการกำหนดเลขรุ่นเอง (เช่น 1.1.0) ให้ใช้ Actions → Release → Run workflow บน branch `release`
+หากชุดทดสอบหรือการสร้างไฟล์ไม่สำเร็จ ระบบจะไม่สร้างหน้า Release
+
+การสร้างชุดสำหรับเผยแพร่ด้วยตนเอง:
 
 ```powershell
 .venv\Scripts\python.exe tools\build_portable.py --llama llama-bXXXX-bin-win-vulkan-x64.zip   # dist\game-lens-portable-<วันที่>.zip

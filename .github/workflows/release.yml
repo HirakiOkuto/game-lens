@@ -1,0 +1,109 @@
+# A push to the `release` branch makes a release: the tests run, both zips are built, a GitHub Release with the next
+# version (v1.0.0 -> v1.0.1) is published with the zips attached, and `main` is moved up to what was released.
+# For another version number (v1.1.0, v2.0.0): Actions -> Release -> Run workflow on `release`, with the version.
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the v (e.g. 1.1.0); empty = the next patch version"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      LLAMA_BUILD: b12755  # llama.cpp Vulkan build that goes into the portable folder (the one tested here)
+      PYTHONIOENCODING: utf-8
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # all tags and commits: the version and the list of changes come from them
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/Scripts/python.exe -m pip install --disable-pip-version-check -q -r requirements.txt
+
+      - name: Test
+        run: |
+          .venv/Scripts/python.exe -m pytest tests -q
+          .venv/Scripts/python.exe -m pytest server/tests -q
+
+      - name: Version
+        id: version
+        env:
+          WANTED: ${{ inputs.version }}
+        run: |
+          prev=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -n "$WANTED" ]; then
+            ver="${WANTED#v}"
+          else
+            last="${prev#v}"; last="${last:-0.0.0}"
+            IFS=. read -r major minor patch <<< "$last"
+            ver="$major.$minor.$((patch + 1))"
+          fi
+          if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
+            echo "::error::v$ver exists already"; exit 1
+          fi
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "previous=$prev" >> "$GITHUB_OUTPUT"
+          echo "releasing v$ver (previous: ${prev:-none})"
+
+      - name: Build
+        run: |
+          mkdir -p build/dl
+          curl -fsSL -o build/dl/llama-vulkan.zip \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-win-vulkan-x64.zip"
+          .venv/Scripts/python.exe tools/build_portable.py --llama build/dl/llama-vulkan.zip
+          .venv/Scripts/python.exe tools/make_zip.py
+          ver="${{ steps.version.outputs.version }}"
+          mv dist/game-lens-portable-*.zip "dist/game-lens-portable-v$ver.zip"
+          mv dist/game-lens-2*.zip "dist/game-lens-v$ver.zip"
+          ls -la dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${{ steps.version.outputs.version }}"
+          prev="${{ steps.version.outputs.previous }}"
+          {
+            echo "## ดาวน์โหลด"
+            echo
+            echo "- **game-lens-portable-v$ver.zip** — ชุดพร้อมใช้งาน แตกไฟล์แล้วดับเบิลคลิก game-lens.exe"
+            echo "- **game-lens-v$ver.zip** — ซอร์สโค้ดพร้อม setup.bat สำหรับผู้ที่ติดตั้ง Python เอง"
+            echo
+            echo "## การเปลี่ยนแปลง${prev:+ ตั้งแต่ $prev}"
+            echo
+            git log --no-merges --format='- %s' ${prev:+"$prev"..}HEAD
+            echo
+            echo "> ⚠️ game-lens มิใช่โปรแกรมของผู้พัฒนาเกมใด ระบบป้องกันการโกงหรือข้อตกลงการใช้งานของเกมบางเกม"
+            echo "> อาจไม่อนุญาตโปรแกรมลักษณะนี้ ไม่มีการรับประกันความปลอดภัยของบัญชีเกม ผู้ใช้เป็นผู้รับความเสี่ยงจากการใช้งานเอง"
+          } > notes.md
+          gh release create "v$ver" "dist/game-lens-portable-v$ver.zip" "dist/game-lens-v$ver.zip" \
+            --target "$GITHUB_SHA" --title "game-lens $ver" --notes-file notes.md
+
+      - name: Move main up to the release
+        continue-on-error: true  # (if main has commits of its own, it is left as it is)
+        run: git push origin "HEAD:refs/heads/main"

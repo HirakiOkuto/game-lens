@@ -144,7 +144,12 @@ def build_python() -> None:
     copy_tree(site, dst, lambda rel: leave_out(rel, SITE_LEAVE_OUT) or "/__pycache__/" in f"/{rel}" or qt_unused(rel))
     # the licenses that go along: Python's own, and a list of every package's (their texts are in their dist-info)
     (OUT / "licenses").mkdir(exist_ok=True)
-    shutil.copyfile(base / "LICENSE.txt", OUT / "licenses" / "Python-LICENSE.txt")
+    if (base / "LICENSE.txt").exists():
+        shutil.copyfile(base / "LICENSE.txt", OUT / "licenses" / "Python-LICENSE.txt")
+    else:  # (a Python not from python.org's installer: its license is the PSF's all the same)
+        (OUT / "licenses" / "Python-LICENSE.txt").write_text(
+            "Python is distributed under the PSF License Agreement: https://docs.python.org/3/license.html\r\n",
+            encoding="utf-8")
     (OUT / "licenses" / "python-packages.txt").write_bytes(package_licenses(dst))
 
 
@@ -195,7 +200,7 @@ def readme() -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--llama", required=True, help="llama.cpp Windows Vulkan x64 release zip")
-    ap.add_argument("--icon", default=str(ROOT / "logs" / "game-lens-icon.ico"))
+    ap.add_argument("--icon", default=str(ROOT / "assets" / "game-lens.ico"))
     ap.add_argument("--no-zip", action="store_true")
     ap.add_argument("--no-google-free", action="store_true",
                     help="leave out \"Google free\" (unofficial: Chrome's built-in key), see tools/public.py")

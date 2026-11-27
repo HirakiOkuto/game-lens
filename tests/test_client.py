@@ -1553,3 +1553,19 @@ def test_overlay_on_a_second_monitor_with_its_own_scaling(monkeypatch):
     o.follow((100, 50, 1280, 720))
     g = o.geometry()
     assert (g.x(), g.y(), g.width(), g.height()) == (80, 40, 1024, 576)
+
+
+def test_erasing_text_on_a_gradient_panel_keeps_the_gradient():
+    """The one-off erase fills a hole harmonically: a panel's shading is carried across where a line was, where
+    Telea's inpainting left a flat bar (and Navier-Stokes streaks across wide holes)."""
+    import cv2 as _cv2
+
+    from gamelens.render import harmonic_fill
+
+    xx, yy = np.meshgrid(np.arange(200), np.arange(60))
+    panel = np.dstack([60 + 0.6 * xx + 1.2 * yy] * 3).clip(0, 255).astype(np.uint8)  # shading at an angle
+    hole = np.zeros((60, 200), np.uint8)
+    hole[18:42, 20:180] = 255  # where a line of text was
+    sel = hole > 0
+    err = lambda out: float(np.abs(out.astype(np.float32)[sel] - panel.astype(np.float32)[sel]).mean())  # noqa: E731
+    assert err(harmonic_fill(panel, hole)) < 0.6 * err(_cv2.inpaint(panel, hole, 3, _cv2.INPAINT_TELEA))

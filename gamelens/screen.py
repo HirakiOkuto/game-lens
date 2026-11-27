@@ -544,7 +544,7 @@ def refresh_patch(item: Item, crop: np.ndarray):
     if item._looks % 2 == 0:  # ten times a second, for as long as it takes to see all of it
         for l in lines:
             learn_strokes(l, crop)
-    patch = erase_lines(crop, lines)
+    patch = erase_lines(crop, lines, full=False)  # (every tick: the quick fill)
     if patch is not None:
         item.patch = to_qimage(patch)
 

@@ -366,9 +366,54 @@ def learn_strokes(line: Line, frame: np.ndarray, need: int = 4) -> bool:
     return True
 
 
-def inpaint(crop: np.ndarray, mask: np.ndarray, h: int) -> np.ndarray:
-    """crop with the pixels of mask filled in from around them. This runs on every tick for text over the scene, so
-    taller lines (1080p and up) are filled at a fraction of their size; what is filled in is blurry anyway."""
+def pull_push(img: np.ndarray, hole: np.ndarray) -> np.ndarray:
+    """The hole filled by weighted multiresolution interpolation: from coarser and coarser averages of the known
+    pixels, each level trusted where enough of it is known (float32 result)."""
+    known = (hole == 0).astype(np.float32)
+    c = img.astype(np.float32) * known[..., None]
+    w = known
+    levels = []
+    while True:
+        levels.append((c, w))
+        hh, ww = w.shape
+        if (w > 0).all() or min(hh, ww) <= 1:
+            break
+        size = (max(1, (ww + 1) // 2), max(1, (hh + 1) // 2))
+        c = cv2.resize(c, size, interpolation=cv2.INTER_AREA).reshape(size[1], size[0], -1)  # (keeps one channel as one)
+        w = cv2.resize(w, size, interpolation=cv2.INTER_AREA)
+    c, w = levels[-1]
+    col = c / np.maximum(w, 1e-6)[..., None]
+    for c, w in reversed(levels[:-1]):
+        up = cv2.resize(col, (w.shape[1], w.shape[0]), interpolation=cv2.INTER_LINEAR).reshape(w.shape[0], w.shape[1], -1)
+        a = np.clip(w * 4, 0, 1)[..., None]  # (a quarter known is enough to trust the average at this level)
+        col = np.where(w[..., None] > 0, a * (c / np.maximum(w, 1e-6)[..., None]) + (1 - a) * up, up)
+    out = img.astype(np.float32)
+    out[hole > 0] = col[hole > 0]
+    return out
+
+
+def harmonic_fill(img: np.ndarray, hole: np.ndarray, steps: int = 10) -> np.ndarray:
+    """pull_push, then steps of Laplace's equation inside the hole: a slope (a panel's gradient, a glow) is carried
+    across the hole as a slope, where inpainting from the edge leaves a flat bar or streaks. (Ten steps do nearly all
+    sixty would - smooth panels 1.25 / 6.8 against 1.19 / 6.7 - at the cost of Telea's inpainting, ~1 ms a line.)"""
+    x = pull_push(img, hole)
+    m = hole > 0
+    for _ in range(steps):
+        x[m] = cv2.blur(x, (3, 3))[m]
+    return x
+
+
+def inpaint(crop: np.ndarray, mask: np.ndarray, h: int, full: bool = False) -> np.ndarray:
+    """crop with the pixels of mask filled in from around them.
+
+    Measured on 380 real glyph masks laid over clean background from our screenshots (colour error / gradient
+    error, lower is better): Telea's method 6.2 / 38.4, Navier-Stokes 5.5 / 36.4, the harmonic fill 6.1 / 35.0 -
+    on smooth panels 1.25 / 6.8 against Telea's 1.8 / 9.1. Navier-Stokes wins the numbers but, seen on the screen,
+    draws streaks across a wide hole ("4306" on a dark pill), where the harmonic fill stays smooth. So a one-off
+    erase (full) is harmonic; the repaint every tick for text over the scene stays with Telea, taller lines (1080p
+    and up) filled at a fraction of their size."""
+    if full:
+        return np.clip(harmonic_fill(crop, mask), 0, 255).astype(np.uint8)
     k = 1 if h <= 22 else 2 if h <= 44 else 3
     if k == 1:
         return cv2.inpaint(crop, mask, 3, cv2.INPAINT_TELEA)
@@ -383,9 +428,9 @@ def inpaint(crop: np.ndarray, mask: np.ndarray, h: int) -> np.ndarray:
     return cv2.resize(small, (W, H), interpolation=cv2.INTER_LINEAR)
 
 
-def erase_lines(frame: np.ndarray, lines: list[Line]) -> np.ndarray | None:
-    """BGRA image the size of the frame: each line's glyphs painted over with their surroundings (inpainted at
-    full resolution, line by line), transparent everywhere else."""
+def erase_lines(frame: np.ndarray, lines: list[Line], full: bool = True) -> np.ndarray | None:
+    """BGRA image the size of the frame: each line's glyphs painted over with their surroundings (inpainted line by
+    line), transparent everywhere else. full=False for the repaint every tick (see inpaint)."""
     lines = [l for l in lines if l is not None and l.mask.any()]
     if not lines:
         return None
@@ -398,7 +443,7 @@ def erase_lines(frame: np.ndarray, lines: list[Line]) -> np.ndarray | None:
         crop = frame[cy0:cy1, cx0:cx1]
         mask = np.zeros(crop.shape[:2], np.uint8)
         mask[ey0 - cy0 : ey1 - cy0, ex0 - cx0 : ex1 - cx0] = l.mask
-        filled = inpaint(crop, mask, l.box[3])
+        filled = inpaint(crop, mask, l.box[3], full)
         alpha = cv2.GaussianBlur(mask, (0, 0), 0.8)
         alpha[mask > 0] = 255
         dst = out[cy0:cy1, cx0:cx1]
